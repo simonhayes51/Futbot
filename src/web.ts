@@ -12,7 +12,7 @@ import {AlertRepository} from './alerts.js';
 import {fodderBoard} from './boards.js';
 import {marketChart} from './chart.js';
 import {coins,isFresh} from './domain.js';
-const root=fileURLToPath(new URL('../dist/',import.meta.url));
+const root=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
 const cookies=(req:IncomingMessage)=>Object.fromEntries((req.headers.cookie??'').split(';').map(v=>v.trim().split('=')));
 export function safeStaticPath(path:string){const p=resolve(root,'.'+path);if(p!==root&&!p.startsWith(root+sep))throw new HttpError(404,'Not found');return p;}
 export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:MarketService){

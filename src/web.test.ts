@@ -6,6 +6,8 @@ test('live API rejects anonymous access, forged mutations and unauthorized serve
  const queries:any[]=[];const pool:any={query:async(sql:string,params:any[])=>{queries.push({sql,params});if(sql.startsWith('SELECT * FROM futbot_sessions'))return {rows:[{session_hash:'hash',user_id:'member',profile:{id:'member'},csrf:'csrf',token_cipher:encrypt('access','s'.repeat(40))}]};return {rows:[]};}};
  const server=createWeb({year:27} as any,{pool} as any,{} as any);await new Promise<void>(r=>server.listen(0,'127.0.0.1',r));const address=server.address() as any,base='http://127.0.0.1:'+address.port;const realFetch=globalThis.fetch;
  try{
+ for(const path of ['/', '/app/', '/app/live.js', '/app/live.css', '/pricing/', '/demo/']){const page=await realFetch(base+path);assert.equal(page.status,200,`Static route ${path} must be served`);if(path==='/app/')assert.match(await page.text(),/Continue with Discord/);}
+ assert.equal((await realFetch(base+'/missing-file')).status,404);
  assert.equal((await realFetch(base+'/api/me')).status,401);
  assert.equal((await realFetch(base+'/auth/callback?code=bad&state=forged')).status,400);
  assert.equal((await realFetch(base+'/api/alerts',{method:'POST',headers:{Cookie:'futbot=token','Content-Type':'application/json'},body:'{}'})).status,403);
