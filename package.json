@@ -1,0 +1,27 @@
+{
+  "name": "futbot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test src/*.test.ts",
+    "start": "node --import tsx src/index.ts",
+    "migrate": "node --import tsx src/migrate.ts",
+    "build:site": "python3 scripts/build-marketing.py"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.0",
+    "dotenv": "^16.6.1",
+    "pg": "^8.16.3",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "@types/jsdom": "^30.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.5",
+    "jsdom": "^30.1.3",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3"
+  }
+}
