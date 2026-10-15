@@ -1,74 +1,89 @@
-# FutBot · first build
+# FutBot
 
-A new standalone Ultimate Team Discord bot and private admin dashboard preview. The existing fut-trader-bot repository is not modified.
+Ultimate Team Discord tools, an editorial marketing website and a live Discord-authenticated control room. FC27 / PS5 by default. Reads your existing PostgreSQL catalogue and BIN history; it does not collect prices or connect to EA accounts.
 
-## What works in this build
+## What is implemented
 
-- Responsive dashboard with eight pages: overview, card explorer, alerts, watchlist, market movers, feeds, appearance, and data connections.
-- Local demo interactions: player filtering, selectable cards/chart ranges, hover chart values, watchlist, alert creation/pause/delete, feed configuration/pause/delete, appearance editor with Discord preview.
-- Two actual card artworks (Lavia/Witzig) downloaded from the supplied catalogue. Other demo cards use clearly illustrative placeholders. All displayed prices, movement, stats for illustrative cards and history series are demonstration data.
-- Separate TypeScript Discord service: `/price`, `/alert`, `/myalerts`, `/removealert`, `/tax`, `/testdm`; player autocomplete, card thumbnails, generated PNG charts, private target-price notifications.
-- Database reader using SELECT-only PostgreSQL connection settings, restricted game year and a configured platform. Price lookups use the supplied source-card/time index.
-- Application schema and alert worker with shared latest-price lookups per watched card, stale-data rejection, an outbox, delivery retries and a single-worker advisory lock. Deterministic Discord nonces reduce duplicate notifications after restarts; exactly-once delivery across database/Discord is not guaranteed.
+17 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`.
 
-## Run the Discord service
+- Player artwork, current BIN, freshness, 24-hour/7-day hourly-median graphs, period median lows/highs and after-tax value. Buy/sell alert, watchlist and chart buttons.
+- Fodder boards: cheapest three fresh-priced cards at each rating (83–91 by default), PNG rating ladder, optional exact rating.
+- Movers: top ten risers/fallers against the last observation 24–25 hours ago. Missing baselines are excluded.
+- Budget finder and two-card price comparison.
+- Cross-device personal watchlists, private target alerts with DM outbox/retries, pause/resume/cancel, DM delivery test.
+- Live dashboard at `/app/`: Discord OAuth, private member data, card explorer, downloadable charts, fodder cards/board download, movers, watchlists, alerts, tax calculator and manual investment records with fresh-price after-tax valuations.
+- Server manager workspace: server name/accent/footer, destination channel selection, live preview, manual fodder board publishing and activity log. Saved settings are used by new bot embeds; this does not rename the bot account or avatar.
 
-Use a continuously running Node 22+ service for the Discord gateway connection. This service is separate from the static preview hosting.
+The original browser-local prototype is preserved at `/demo/`. `/app/` now uses the backend API rather than demo data. Personal alerts, watchlists and investments never appear in server-admin views.
 
-1. `npm ci`
-2. Copy `.env.example` to `.env` and configure secrets in your host (do not commit them).
-3. Use a SELECT-only database account for `PRICE_DATABASE_URL`.
-4. Use a different application database for `APP_DATABASE_URL`.
-5. `npm run migrate` applies **only** `sql/001-app.sql` to the application database.
-6. Create a new Discord application named FutBot. Invite with the `bot` and `applications.commands` scopes and Send Messages, Embed Links and Attach Files permissions. No privileged message-content intent is required.
-7. Configure `DISCORD_TOKEN` and optionally `DISCORD_GUILD_ID` for guild-scoped command registration during development. Without a guild ID, the service registers commands globally to its own application.
-8. `npm start`
+## Deploy on Railway or Coolify
 
-Default source selection is FC27 / `ps5`, the market observed in the supplied latest-data sample. Configure other platforms only after confirming actual database coverage. The max price age defaults to 15 minutes and is configurable.
+Node.js 22+. Repository root `/`, branch `main`. Install `npm ci --include=dev`; build/check `npm run check`. `tsx` is currently a development dependency required at runtime, so keep `--include=dev`.
 
-## Source data contract
+### Simplest option: one service for both bot and website
 
-`public.futgg_players`: source_card_id, game_year, is_active, name/display_name/full_name, rating, primary_position, rarity, club and artwork URLs.
+1. Deploy this repository as a Node/Nixpacks/Railpack application, not a static site.
+2. Start command: `npm run migrate && npm start`.
+3. Set `WEB_ENABLED=true`, all existing database/bot variables and the dashboard variables below.
+4. Set container port 3000 on Coolify, or use Railway's supplied `PORT`. Generate a public HTTPS domain pointing to that port. Health-check path `/healthz`.
+5. Set `PUBLIC_URL` to that exact HTTPS origin, without a path, and redeploy.
+6. In your Discord application's OAuth2 settings, add the exact redirect URL `https://YOUR-DOMAIN/auth/callback`.
+7. Visit `https://YOUR-DOMAIN/app/` and continue with Discord. The same service also serves the marketing homepage.
 
-`public.futgg_bin_history`: source_card_id, game_year, platform, lowest_bin, captured_at, id. Current price means the latest positive observed BIN for that card/year/platform. A newly captured record does not by itself prove that the source market observation was newly updated. Charts use hourly median observed BIN values, up to seven days in this build.
+Use one replica for the combined service. Do not also run a second bot instance with the same token.
 
-The bot does not query old FC26 history or use recommendation snapshots to present profit guarantees. Sales analytics, broader market ranking and provider feeds are further modules.
+### Separate bot and dashboard services
 
-## Dashboard status
+Use the same repository twice. Bot: `WEB_ENABLED=false`, start `npm run migrate && npm start`, no public domain or HTTP health check. Dashboard: start `npm run migrate && npm run start:web`, public port/domain, `/healthz` health check. Set the same database URLs and bot token on both. OAuth variables belong on the dashboard; also set `PUBLIC_URL` on the bot so `/dashboard` links correctly. Both services use the same application database. The dashboard process does not open a Discord Gateway connection or run the alert worker.
 
-The published preview is static and owner-private. It does **not** access production prices, sign into Discord, change your real server, send DMs or process payments. Demo settings live in localStorage in the current browser. Server switching and connections explain their pending setup rather than pretending to connect.
+Do not deploy `/app/` on static-only hosting: login, sessions and API routes require Node. The marketing pages and `/demo/` can be separately hosted as static files, but links must route to your live dashboard origin.
 
-## Validation
+## Environment
 
-- `npm run check`: TypeScript compile checks.
-- `npm test`: alert threshold/freshness, tax, chart output and dashboard interaction tests.
-- `node --check dist/app/app.js`: browser script syntax.
+Copy `.env.example` into hosting variables. Never commit real values.
 
-## Next implementation milestones
+```dotenv
+PRICE_DATABASE_URL=postgresql://READ_ONLY_USER:.../existing_prices
+APP_DATABASE_URL=postgresql://APP_USER:.../futbot
+DISCORD_TOKEN=YOUR_BOT_TOKEN
+DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
+GAME_YEAR=27
+PLATFORM=ps5
+ALERT_POLL_MS=30000
+MAX_PRICE_AGE_MINUTES=15
+FREE_ALERT_LIMIT=3
+WEB_ENABLED=true
+PUBLIC_URL=https://YOUR-DOMAIN
+DISCORD_CLIENT_ID=YOUR_DISCORD_APPLICATION_ID
+DISCORD_CLIENT_SECRET=YOUR_DISCORD_OAUTH_CLIENT_SECRET
+SESSION_SECRET=GENERATE_A_RANDOM_SECRET_AT_LEAST_32_CHARACTERS
+PORT=3000
+```
 
-1. Configure source/app database credentials and the new Discord token; verify latest-price/card mapping using real FC27 cards.
-2. Add Discord OAuth and a permission-checked admin API; move browser-local settings into the application database.
-3. Wire admin alerts, brand settings and watchlists to the service, including role permissions and multi-server access checks.
-4. Add feed ingestion, provider entitlements, filters and channel routing. The current feed page is configuration preview only.
-5. Add sales/market analytics, server digests, portfolio and squad-shopping tools.
-6. Add subscriptions after deciding the feature limits and payer model.
+Generate a session secret with `openssl rand -hex 32`. Keep it stable across deployments. Rotating it invalidates existing encrypted session tokens; users must sign in again. Use the OAuth client secret, not the bot token, for `DISCORD_CLIENT_SECRET`.
 
-Production PostgreSQL/Discord integration tests and visual browser QA have not run without credentials and an available supported browser-control surface.
+An omitted `DISCORD_GUILD_ID` registers commands globally. If set, the bot must be a member of that server. Invite the bot with `bot` and `applications.commands` scopes. It needs View Channel, Send Messages, Embed Links and Attach Files for board publishing. No privileged Gateway intents are used. Website login requests `identify guilds` scopes only.
 
-## Marketing website
+## Data and schema
 
-The root website now includes a homepage, `/pricing/`, `/commands/` and `/servers/`. The original dashboard lives at `/app/` with its local demo interactions preserved. Generate the four marketing pages with `npm run build:site`. Shared styling and interaction code are `dist/site.css` and `dist/site.js`.
+Use separate price and application databases. `npm run migrate` applies the idempotent SQL files in `sql/` to the application database only. The price pool sets default transactions read-only. Website sessions, alerts, delivery outbox, watchlists, server settings, activity and investments live in the application database.
 
-The website clearly identifies the development stage and proposed launch prices. No payments, installation, signup or production account connection is enabled. Server Complete pricing is proposed at £19.99/25 seats, £49.99/100 seats and £99.99/250 seats monthly. Annual pricing is ten monthly payments upfront (two months free). These are planning prices, not provisioned Stripe products. Free defaults are aligned to three alerts in the bot configuration.
+Price source: `public.futgg_players` and `public.futgg_bin_history`. Preserve field names and game/platform filters in `src/prices.ts` and `src/market.ts`. No DDL or writes run on the pricing database. The pricing collector continues independently.
 
-The command guide documents the six implemented service commands and separately labels fifteen proposed commands. Pricing entitlements, server sponsorship, admin OAuth, social feed delivery, broader analytics and the member dashboard remain future work.
+Market snapshots are shared and cached for five minutes per process, coalescing concurrent reads. Expired observations are withheld even within the cache. They require fresh observations (15 minutes by default). Price source queries time out after eight seconds. If market queries time out on a large database, check source indexes and query plans with the database owner: this app intentionally does not add indexes to your source database.
 
-## Visual direction: FutBot Field Guide / Issue 001
+Price graphs use hourly medians, not every raw observation. Movement compares latest BIN with a baseline observation, not trading advice. Fodder means cheapest available catalogue items at a rating: no guarantee of SBC eligibility, tradeability or an obtainable listing. Investment records are manual and unrealised; they do not sync with an EA club. Stale/unavailable holdings are excluded from profit totals.
 
-The website takes its visual language from late-1990s football magazines and console demo-disc packaging: silver paper, cobalt blue, fluorescent orange, condensed italic sports headlines, numbered editorial rows and a player-card collage. The pricing page uses season-ticket styling; commands read as a game manual. The dashboard pairs dark console navigation with a silver workspace. All existing demo interactions and proposed pricing remain in place.
+## Access controls
 
-## Deployment and admin access
+OAuth state validation, encrypted server-side access tokens, random hashed session cookies (HttpOnly/SameSite/Secure over HTTPS), expiry and CSRF-protected writes. Server management checks Discord membership and Manage Server/Administrator permission at request time, plus bot installation. Channel choices resolve bot channel permission overwrites. Server managers cannot inspect other users' targets, watchlists or portfolios. Publishing is a deliberate button action with a one-minute cooldown and an audit record. No automatic external feed posting is enabled.
 
-The website dashboard is `/app/` on the domain serving `dist`. This is a clearly labelled browser-local demo, not an authenticated live admin backend. Deploying the Discord worker alone does not serve a website or expose an admin URL. Live OAuth, role checks and the API connecting dashboard settings to the bot remain to be implemented.
+## Development
 
-Redeploy the bot with the existing `npm run migrate && npm start` command after updates. Charts bundle DejaVu Sans with its licence; no font installation is needed on Railway or Coolify. Run `/testdm` to verify real DM delivery. An actual threshold alert still requires a fresh observed price meeting its target.
+`npm run check` and `npm test`. `npm run build:site` regenerates marketing pages (requires Python 3 locally); generated files are committed so deployments need not run Python. `dist/app/live.*` is the live dashboard. `dist/demo/` is the isolated prototype. Chart and fodder PNGs bundle DejaVu Sans with its licence, avoiding missing-font failures on cloud hosts.
+
+Automated checks cover market grouping/cache/freshness, chart generation, auth/permissions, CSRF rejection, private API queries, dashboard alert creation/branding, demo flows and marketing interactions. Real PostgreSQL queries, real Discord OAuth and hosted browser layouts still require deployment verification with your credentials.
+
+## Still outside this build
+
+Payments, sponsored Pro seats, entitlement enforcement, X/TweetShift-style ingestion, recurring digest scheduling, sales-history analytics, percentage-movement alerts, squad budget targets and automated trading are not implemented. The pricing page is proposed launch pricing, not an active checkout. Development watchlist allowance is 100; subscription tiers are not enforced. The command guide labels remaining ideas as roadmap.

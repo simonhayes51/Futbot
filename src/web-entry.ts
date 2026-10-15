@@ -1,0 +1,10 @@
+import 'dotenv/config';
+import {PriceRepository} from './prices.js';
+import {AlertRepository} from './alerts.js';
+import {MarketService} from './market.js';
+import {startWeb} from './web.js';
+if(!process.env.PRICE_DATABASE_URL||!process.env.APP_DATABASE_URL||process.env.PRICE_DATABASE_URL===process.env.APP_DATABASE_URL)throw new Error('Configure separate price and application database URLs.');
+const prices=new PriceRepository(process.env.PRICE_DATABASE_URL,Number(process.env.GAME_YEAR||27)),alerts=new AlertRepository(process.env.APP_DATABASE_URL);
+await Promise.all([prices.pool.query('SELECT 1'),alerts.pool.query('SELECT 1 FROM futbot_sessions LIMIT 0')]);
+const server=startWeb(prices,alerts,new MarketService(prices,process.env.PLATFORM||'ps5',Number(process.env.MAX_PRICE_AGE_MINUTES||15)));
+for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>server.close(()=>{void Promise.all([prices.pool.end(),alerts.pool.end()]).then(()=>process.exit(0));}));

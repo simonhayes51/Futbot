@@ -1,9 +1,16 @@
 import 'dotenv/config';
+import {AsyncLocalStorage} from 'node:async_hooks';
+import {MarketService} from './market.js';
+import {startWeb} from './web.js';
+import type {Server} from 'node:http';
+import {extraCommands,handleTool} from './tools.js';
+import {guildSettings,defaultBrand,watch,type GuildSettings} from './settings.js';
 import { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, type Interaction } from 'discord.js';
 import { PriceRepository } from './prices.js';
 import { AlertRepository,alertTick,type Alert } from './alerts.js';
 import { coins,isFresh,tradeProfit,type Direction,type Card } from './domain.js';
 import { marketChart } from './chart.js';
+import {tradeReceipt} from './boards.js';
 
 for(const key of ['PRICE_DATABASE_URL','APP_DATABASE_URL','DISCORD_TOKEN'])if(!process.env[key])throw new Error(`Missing ${key}. See .env.example.`);
 if(process.env.PRICE_DATABASE_URL===process.env.APP_DATABASE_URL)throw new Error('Use a separate application database');
@@ -14,9 +21,11 @@ if(![year,maxAge,limit,pollMs].every(Number.isFinite))throw new Error('Invalid n
 const prices=new PriceRepository(process.env.PRICE_DATABASE_URL!,year);
 const alerts=new AlertRepository(process.env.APP_DATABASE_URL!);
 const client=new Client({intents:[GatewayIntentBits.Guilds]});
-const brand=()=>new EmbedBuilder().setColor(0x3458ff).setFooter({text:`FutBot • FC${year} • ${platform.toUpperCase()}`});
+const context=new AsyncLocalStorage<GuildSettings>();
+const market=new MarketService(prices,platform,maxAge);
+const brand=()=>{const b=context.getStore()??defaultBrand;return new EmbedBuilder().setColor(b.accent as `#${string}`).setAuthor({name:b.name}).setFooter({text:`${b.footer} • FC${year} • ${platform.toUpperCase()}`});};
 const playerOption=(o:any)=>o.setName('player').setDescription('Search a player and choose the exact card').setRequired(true).setAutocomplete(true);
-const commands=[
+const commands=[...extraCommands,
   new SlashCommandBuilder().setName('price').setDescription('Check a card price with artwork and market history').addStringOption(playerOption),
   new SlashCommandBuilder().setName('alert').setDescription('Get a private DM when a card reaches your price').addStringOption(playerOption)
     .addStringOption(o=>o.setName('direction').setDescription('Target direction').setRequired(true).addChoices({name:'At or below',value:'below'},{name:'At or above',value:'above'}))
@@ -36,7 +45,7 @@ async function resolveCard(value:string):Promise<Card>{
 }
 async function showPrice(card:Card,hours=24){
   const [price,history]=await Promise.all([prices.latest(card.id,platform),prices.history(card.id,platform,hours)]);
-  const embed=brand().setTitle(`${card.name} · ${card.rating??'—'} ${card.position??''}`).setDescription(`${card.rarity||'Player item'}${card.club?' · '+card.club:''}`);
+  const embed=brand().setTitle(`🪙 ${card.name} · ${card.rating??'—'} ${card.position??''}`).setDescription(`${card.rarity||'Player item'}${card.club?' · '+card.club:''}`);
   if(card.image&&card.image.startsWith('https://'))embed.setThumbnail(card.image);
   const files:AttachmentBuilder[]=[];
   if(!price){embed.addFields({name:'Market price',value:'No price available for this market.'});return {embeds:[embed],files,components:[]};}
@@ -48,8 +57,8 @@ async function showPrice(card:Card,hours=24){
     const png=await marketChart(`${card.name} / ${period} history`,history);if(png){files.push(new AttachmentBuilder(png,{name:'market.png'}));embed.setImage('attachment://market.png');}
   }
   if(history.length){const values=history.map(p=>p.value);embed.addFields({name:`${period.toUpperCase()} LOW`,value:coins(Math.min(...values))+' coins',inline:true},{name:`${period.toUpperCase()} HIGH`,value:coins(Math.max(...values))+' coins',inline:true},{name:'AFTER 5% TAX',value:coins(Math.floor(price.value*.95))+' coins',inline:true});}
-  embed.setFooter({text:`FutBot • FC${year} • ${platform.toUpperCase()} • Observed prices, not guaranteed listings`}).setTimestamp(price.capturedAt);
-  const row=new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`newalert:${card.id}`).setLabel('Set price alert').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`history:${card.id}:${hours===24?168:24}`).setLabel(hours===24?'7 day history':'24 hour history').setStyle(ButtonStyle.Secondary));
+  embed.setFooter({text:`${context.getStore()?.footer??defaultBrand.footer} • FC${year} • ${platform.toUpperCase()} • Observed BIN`}).setTimestamp(price.capturedAt);
+  const row=new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`newalert:${card.id}`).setLabel('Buy alert').setEmoji('🔔').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`history:${card.id}:${hours===24?168:24}`).setLabel(hours===24?'7-day chart':'24-hour chart').setEmoji('📊').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`abovealert:${card.id}`).setLabel('Sell alert').setEmoji('📈').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`watch:${card.id}`).setLabel('Watch').setEmoji('⭐').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`history:${card.id}:${hours}`).setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary));
   return {embeds:[embed],files,components:[row]};
 }
 async function createAlert(i:any,value:string,direction:Direction,target:number){
@@ -67,38 +76,43 @@ async function handle(i:Interaction){
   }
   if(i.isButton()){
     const [action,id,hours]=i.customId.split(':');if(!/^\d+$/.test(id||''))return;
-    if(action==='newalert'){
-      const modal=new ModalBuilder().setCustomId(`alertmodal:${id}`).setTitle('Set your price target');
-      const target=new TextInputBuilder().setCustomId('target').setLabel('Notify at or below this price (coins)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8);
+    if(action==='watch'){await i.deferReply({ephemeral:true});await resolveCard(id);await watch(alerts.pool,i.user.id,id,year,platform);await i.editReply('⭐ Card added to your private watchlist. Use /watchlist or /dashboard.');return;}
+    if(action==='newalert'||action==='abovealert'){
+      const modal=new ModalBuilder().setCustomId(`alertmodal:${id}:${action==='abovealert'?'above':'below'}`).setTitle('Set your price target');
+      const target=new TextInputBuilder().setCustomId('target').setLabel(action==='abovealert'?'Notify at or above this price (coins)':'Notify at or below this price (coins)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8);
       modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(target));await i.showModal(modal);return;
     }
     if(action==='history'){await i.deferReply({ephemeral:true});await i.editReply(await showPrice(await resolveCard(id),hours==='168'?168:24));return;}
   }
-  if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({ephemeral:true});await i.editReply({embeds:[await createAlert(i,i.customId.split(':')[1],'below',Number(i.fields.getTextInputValue('target')))]});return;}
+  if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({ephemeral:true});await i.editReply({embeds:[await createAlert(i,i.customId.split(':')[1],i.customId.split(':')[2]==='above'?'above':'below',Number(i.fields.getTextInputValue('target')))]});return;}
   if(!i.isChatInputCommand())return;
-  await i.deferReply({ephemeral:i.commandName!=='price'});
+  await i.deferReply({ephemeral:!['price','fodder','movers','budget','compare'].includes(i.commandName)});
+  if(extraCommands.some(c=>c.name===i.commandName)){await handleTool(i,market,alerts,brand,resolveCard);return;}
   if(i.commandName==='testdm'){try{await i.user.send({embeds:[brand().setTitle('NOTIFICATIONS / CONNECTED').setDescription('FutBot can reach your DMs. Price alerts will arrive here when a fresh observed price meets your target.')]});await i.editReply('Test notification sent. Check your DMs.');}catch{await i.editReply('I could not send you a DM. Enable direct messages from this server, check that FutBot is not blocked, then run /testdm again.');}}
   if(i.commandName==='price')await i.editReply(await showPrice(await resolveCard(i.options.getString('player',true))));
   if(i.commandName==='alert')await i.editReply({embeds:[await createAlert(i,i.options.getString('player',true),i.options.getString('direction',true) as Direction,i.options.getInteger('target',true))]});
   if(i.commandName==='myalerts'){const rows=await alerts.list(i.user.id);await i.editReply({embeds:[brand().setTitle('Your saved alerts').setDescription(rows.length?rows.map(a=>`**#${a.id} · ${a.card_name}**\n${a.platform.toUpperCase()} · ${a.direction} ${coins(Number(a.target))} · ${a.state}`).join('\n\n'):'No saved alerts. Try /alert or use the button on /price.')]});}
   if(i.commandName==='removealert'){const id=i.options.getString('id',true);if(!/^\d+$/.test(id))throw new Error('Enter the numeric alert ID.');await i.editReply(await alerts.remove(i.user.id,id)?'Alert cancelled.':'No cancellable alert with that ID belongs to you. Queued notifications cannot be cancelled.');}
-  if(i.commandName==='tax'){const r=tradeProfit(i.options.getInteger('buy',true),i.options.getInteger('sell',true),i.options.getInteger('quantity')||1);await i.editReply({embeds:[brand().setTitle('Your trade calculation').addFields({name:'Profit after tax',value:coins(r.profit)+' coins',inline:true},{name:'EA tax',value:coins(r.tax)+' coins',inline:true},{name:'Break-even / copy',value:coins(r.breakEven)+' coins',inline:true})]});}
+  if(i.commandName==='tax'){const buy=i.options.getInteger('buy',true),sell=i.options.getInteger('sell',true),quantity=i.options.getInteger('quantity')||1,r=tradeProfit(buy,sell,quantity);await i.editReply({embeds:[brand().setTitle('🧮 YOUR TRADE RECEIPT').setDescription(`**${quantity} cop${quantity===1?'y':'ies'}** · Buy ${coins(buy)} / Sell ${coins(sell)}`).addFields({name:'PROFIT AFTER TAX',value:(r.profit>=0?'+':'')+coins(r.profit)+' coins',inline:true},{name:'TOTAL EA TAX',value:coins(r.tax)+' coins',inline:true},{name:'BREAK-EVEN / COPY',value:coins(r.breakEven)+' coins',inline:true}).setImage('attachment://receipt.png')],files:[new AttachmentBuilder(await tradeReceipt(buy,sell,quantity),{name:'receipt.png'})]});}
+
 }
-client.on('interactionCreate',i=>{handle(i).catch(async e=>{const message=e instanceof Error&& !('code' in e)?e.message:'Something went wrong. Please try again shortly.';if(i.isAutocomplete()){await i.respond([]).catch(()=>{});return;}if(i.isRepliable()){if(i.deferred||i.replied)await i.editReply({content:message,embeds:[],components:[]}).catch(()=>{});else await i.reply({content:message,ephemeral:true}).catch(()=>{});}});});
+client.on('interactionCreate',i=>{guildSettings(alerts.pool,i.guildId).then(b=>context.run(b,()=>handle(i))).catch(async e=>{const message=e instanceof Error&& !('code' in e)?e.message:'Something went wrong. Please try again shortly.';if(i.isAutocomplete()){await i.respond([]).catch(()=>{});return;}if(i.isRepliable()){if(i.deferred||i.replied)await i.editReply({content:message,embeds:[],components:[]}).catch(()=>{});else await i.reply({content:message,ephemeral:true}).catch(()=>{});}});});
 let timer:NodeJS.Timeout|undefined,busy=false;
+let web:Server|undefined;
 client.on('error',e=>console.error('Discord client error:',e.message));
 client.once('clientReady',()=>{void startBot().catch(async e=>{console.error('FutBot startup failed:',e?.code===10004?'DISCORD_GUILD_ID is inaccessible. Check the server ID and invite this bot, or remove DISCORD_GUILD_ID for global commands.':e instanceof Error?e.message:'Unknown startup error');await stop(1);});});
 async function startBot(){
   const guildId=process.env.DISCORD_GUILD_ID;
   if(guildId){const guild=await client.guilds.fetch(guildId);await guild.commands.set(commands.map(c=>c.toJSON()));}
   else await client.application!.commands.set(commands.map(c=>c.toJSON()));
+  if(process.env.WEB_ENABLED==='true')web=startWeb(prices,alerts,market);
   console.log(`FutBot ready · FC${year} · ${platform} · ${commands.length} commands`);
   const tick=async()=>{if(busy)return;busy=true;try{await alertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{
-    const user=await client.users.fetch(userId);await user.send({nonce:`fb${a.id}`,enforceNonce:true,embeds:[brand().setTitle('Your price target was reached').setDescription(`**${a.card_name}** · ${a.platform.toUpperCase()}`).addFields({name:'Observed price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`})]});
+    const user=await client.users.fetch(userId);const b=await guildSettings(alerts.pool,(a as any).guild_id);await context.run(b,()=>user.send({nonce:`fb${a.id}`,enforceNonce:true,embeds:[brand().setTitle('Your price target was reached').setDescription(`**${a.card_name}** · ${a.platform.toUpperCase()}`).addFields({name:'Observed price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`})]}));
   });}catch{console.error('Alert cycle failed. Check database connectivity.');}finally{busy=false;}};
   timer=setInterval(()=>void tick(),pollMs);await tick();
 }
-async function stop(code=0){if(timer)clearInterval(timer);client.destroy();await Promise.all([prices.pool.end(),alerts.pool.end()]);process.exit(code);}
+async function stop(code=0){if(web)web.close();if(timer)clearInterval(timer);client.destroy();await Promise.all([prices.pool.end(),alerts.pool.end()]);process.exit(code);}
 process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop());
 await Promise.all([prices.pool.query('SELECT 1'),alerts.pool.query('SELECT 1 FROM futbot_alerts LIMIT 0')]);
 await client.login(process.env.DISCORD_TOKEN);

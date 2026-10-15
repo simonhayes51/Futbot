@@ -11,30 +11,216 @@ function openPlan(key){const p=plans[key],n=monthlyPrice(key),annual=billing==='
 function renderPlans(){const target=$('#plans');if(!target)return;target.innerHTML=Object.entries(plans).map(([key,p])=>{const monthly=monthlyPrice(key),annual=billing==='annual',display=annual?monthly*10/12:monthly;return `<article class="plan ${key==='complete'?'featured':''}">${key==='complete'?'<span class="plan-badge">THE WHOLE SERVER PACKAGE</span>':''}<span class="plan-label">${p.audience}</span><h3>${p.name}</h3><p class="plan-desc">${p.desc}</p>${key==='complete'?`<label class="seat-select">Seats <select id="seat-count" aria-label="Sponsored member seats">${Object.keys(seatPrices).map(s=>`<option value="${s}" ${s===seats?'selected':''}>${s} sponsored members</option>`).join('')}</select></label>`:'<div class="seat-select" aria-hidden="true"></div>'}<div class="plan-price">${monthly===0?'£0':money(display)}<span>${monthly===0?'always':'/ month'}</span></div><div class="plan-billed">${monthly===0?'No subscription needed':annual?`${money(monthly*10)} billed yearly · 2 months free`:'Billed monthly at launch'}</div><button class="btn ${key==='complete'?'primary':'secondary'}" data-plan="${key}">${p.button} ↗</button><div class="plan-features">${p.features.map(f=>`<p>${f}</p>`).join('')}</div><small class="soon">${p.note}</small></article>`;}).join('');$$('[data-plan]').forEach(b=>b.onclick=()=>openPlan(b.dataset.plan));if($('#seat-count'))$('#seat-count').onchange=e=>{seats=e.target.value;renderPlans();};}
 $$('[data-billing]').forEach(b=>b.onclick=()=>{billing=b.dataset.billing;$$('[data-billing]').forEach(t=>{const active=t===b;t.classList.toggle('active',active);t.setAttribute('aria-pressed',String(active));});renderPlans();});renderPlans();
 const commandData=[
-{name:'/price',category:'prices',status:'first',plan:'Free',description:'Look up an exact card with artwork, the latest configured-market price, the observation timestamp and an hourly price graph. Buttons let you open a target alert or switch the chart to seven days in the first build.',example:'/price player:Romeo Lavia 78',options:'player — start typing a name and select a card from autocomplete. The service uses its configured market; it does not currently expose a platform option.'},
-{name:'/alert',category:'alerts',status:'first',plan:'Free / Pro limits planned',description:'Save a private target for a card. The service checks fresh database observations and queues a DM when the price is at or below, or at or above, your target.',example:'/alert player:Romeo Lavia 78 direction:below target:750',options:'player — exact card; direction — below or above (includes equality); target — whole coins from 1 to 15,000,000. Enable DMs.'},
-{name:'/testdm',category:'alerts',status:'first',plan:'Free',description:'Send yourself a test notification to check that FutBot can reach your DMs.',example:'/testdm',options:'No options. Enable server DMs and make sure FutBot is not blocked.'},
-{name:'/myalerts',category:'alerts',status:'first',plan:'Free',description:'Privately list your active, queued, paused or failed alerts with their IDs, card names, targets and states.',example:'/myalerts',options:'No options. The response is private to you. Use an alert’s numeric ID with /removealert.'},
-{name:'/removealert',category:'alerts',status:'first',plan:'Free',description:'Cancel an alert that belongs to your account. The first build allows active, paused and failed alerts to be cancelled; a notification already queued for delivery cannot be cancelled.',example:'/removealert id:12',options:'id — numeric alert ID from /myalerts. Members can only cancel their own alerts.'},
-{name:'/tax',category:'market',status:'first',plan:'Free',description:'Calculate EA’s 5% sale tax, profit after tax and the break-even sale price. Use quantity for several copies of the same card.',example:'/tax buy:25000 sell:30000 quantity:3',options:'buy and sell — price per card; quantity — optional, 1 to 1,000. Break-even is per copy; total tax and profit include quantity.'},
-{name:'/watch add',category:'alerts',status:'planned',plan:'Free / Personal Pro',description:'Save an exact card to a named watchlist and check its price alongside the other cards you’re following.',example:'/watch add player:Romeo Lavia 78 list:My squad',options:'Proposed: player and optional list name. Dashboard watchlists currently work as local demonstrations.'},
-{name:'/watch list',category:'alerts',status:'planned',plan:'Free / Personal Pro',description:'Show a watchlist’s cards, price movement and combined cost, with buttons for individual charts and targets.',example:'/watch list name:My squad',options:'Proposed: list name. Planned allowances are one small free list or ten larger Pro lists.'},
-{name:'/compare',category:'prices',status:'planned',plan:'Free comparison / Pro depth',description:'Compare exact player items with card images, main attributes, market prices and recent movement together.',example:'/compare player1:Romeo Lavia 78 player2:Christian Witzig 71',options:'Proposed: two exact card selections. Comparison graphics and market context are on the roadmap.'},
-{name:'/history',category:'prices',status:'planned',plan:'Free / Personal Pro',description:'Open a card’s price history directly, choosing from time ranges supported by the stored observations.',example:'/history player:Romeo Lavia 78 range:7d',options:'Proposed: player and range. For now, use the history button on /price; a separate /history command is not registered.'},
-{name:'/movementalert',category:'alerts',status:'planned',plan:'Personal Pro',description:'Watch for a percentage rise or drop over a selected period instead of entering a fixed coin target.',example:'/movementalert player:Romeo Lavia 78 drop:10 range:24h',options:'Proposed: card, percentage and time window. Minimum data coverage and freshness rules will apply.'},
-{name:'/squadbudget',category:'alerts',status:'planned',plan:'Personal Pro',description:'Track the combined cost of a saved squad shopping list and alert when it fits your budget.',example:'/squadbudget list:My squad target:250000',options:'Proposed: saved list and total coin budget. No EA account connection or automatic in-game purchasing.'},
-{name:'/market movers',category:'market',status:'planned',plan:'Free / Pro filters',description:'See observed risers and fallers with filters for price band, rating, rarity and time range.',example:'/market movers direction:fallers range:24h',options:'Proposed: direction, range and optional filters. Stale cards and thin observation windows will be labelled or excluded.'},
-{name:'/market fodder',category:'market',status:'planned',plan:'Free / Pro history',description:'Find cheaper cards within a rating band and follow the changing cost of rating-based fodder baskets.',example:'/market fodder rating:87',options:'Proposed: rating and optional history range. Uses current card prices rather than assumed SBC costs.'},
-{name:'/market pulse',category:'market',status:'planned',plan:'Personal Pro / server plans',description:'Get a readable market summary showing notable movement and context from available price and event data.',example:'/market pulse range:24h',options:'Proposed: time range. Scheduled channel summaries will be configured by admins.'},
-{name:'/sales',category:'market',status:'planned',plan:'Personal Pro',description:'Inspect recent observed sale prices, median values, dispersion and sample size for a card.',example:'/sales player:Romeo Lavia 78',options:'Proposed: exact card and analysis window. The age and approximate timing of source sales will remain visible.'},
-{name:'/portfolio add',category:'market',status:'planned',plan:'Personal Pro',description:'Manually record a purchase price and quantity, then track current value and estimated profit after tax.',example:'/portfolio add player:Romeo Lavia 78 buy:750 quantity:10',options:'Proposed: card, purchase price and copies. This is a personal record, not a connection to your actual FUT club.'},
-{name:'/serverbrand',category:'server',status:'planned',plan:'Server Tools / Complete',description:'Set your server’s display name, colours and embed footer. Admin permission checks will protect changes.',example:'/serverbrand name:FUTBank Scout colour:#ff5b00',options:'Proposed: brand name, accent and footer. Live style preview is already available in the demo dashboard.'},
-{name:'/feed setup',category:'server',status:'planned',plan:'Server Tools / Complete',description:'Configure a supported source, destination channel and filters for your community’s FC updates.',example:'/feed setup source:official channel:#fc-news',options:'Proposed: provider/source and channel. X access depends on provider entitlement; setup does not bypass it.'},
-{name:'/server pro',category:'server',status:'planned',plan:'Server Complete',description:'Choose the role whose eligible members receive sponsored Personal Pro, within the server’s purchased seat allowance.',example:'/server pro role:@Premium Members',options:'Proposed: eligible role. Admin-only. Sponsorship is scoped to that server; private member data remains private.'},
-{name:'/digest setup',category:'server',status:'planned',plan:'Server Tools / Complete',description:'Choose a channel, schedule and market topics for a recurring community summary.',example:'/digest setup channel:#market-watch time:18:00',options:'Proposed: channel, time, timezone and enabled topics. Scheduled publication is not active yet.'}
+ {
+  "name": "/price",
+  "category": "prices",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Check an exact card with artwork, latest BIN, freshness, hourly-median chart, tax value and buy/sell target buttons.",
+  "example": "/price player:Romeo Lavia 78",
+  "options": "player — choose an exact card using autocomplete."
+ },
+ {
+  "name": "/alert",
+  "category": "alerts",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Create a private one-shot target that sends a DM when a fresh observed price reaches your number.",
+  "example": "/alert player:Romeo Lavia 78 direction:below target:750",
+  "options": "player, direction (above/below, including equality), target (whole coins)."
+ },
+ {
+  "name": "/testdm",
+  "category": "alerts",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Send a private test notification to check Discord DM delivery.",
+  "example": "/testdm",
+  "options": "Enable DMs from the server and ensure FutBot is not blocked."
+ },
+ {
+  "name": "/myalerts",
+  "category": "alerts",
+  "status": "first",
+  "plan": "Development access",
+  "description": "List your own active, paused, queued or failed targets.",
+  "example": "/myalerts",
+  "options": "Private results. Alert IDs are used for controls."
+ },
+ {
+  "name": "/removealert",
+  "category": "alerts",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Cancel your active, paused or failed alert. Queued notifications cannot be cancelled.",
+  "example": "/removealert id:12",
+  "options": "id — the numeric ID of an alert belonging to you."
+ },
+ {
+  "name": "/pausealert",
+  "category": "alerts",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Pause an active target without deleting it.",
+  "example": "/pausealert id:12",
+  "options": "id — one of your active alert IDs."
+ },
+ {
+  "name": "/resumealert",
+  "category": "alerts",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Resume one of your paused targets.",
+  "example": "/resumealert id:12",
+  "options": "id — one of your paused alert IDs."
+ },
+ {
+  "name": "/tax",
+  "category": "market",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Calculate total profit after 5% EA tax, total tax and mathematical break-even per copy.",
+  "example": "/tax buy:25000 sell:30000 quantity:3",
+  "options": "buy, sell, optional quantity (1–1,000). Choose a valid market listing increment at or above break-even."
+ },
+ {
+  "name": "/fodder",
+  "category": "market",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Get a graphic price ladder and the three cheapest fresh-priced cards at each rating from 83 to 91.",
+  "example": "/fodder rating:85",
+  "options": "Optional exact rating (75–99). This compares prices, not SBC eligibility."
+ },
+ {
+  "name": "/movers",
+  "category": "market",
+  "status": "first",
+  "plan": "Development access",
+  "description": "View the ten largest fresh-priced risers or fallers against an observation 24–25 hours ago.",
+  "example": "/movers direction:fallers",
+  "options": "Optional direction: risers or fallers. Cards without a comparable baseline are excluded."
+ },
+ {
+  "name": "/budget",
+  "category": "market",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Find high-rated cards within a coin budget and optional primary position.",
+  "example": "/budget coins:25000 position:CM rating:85",
+  "options": "coins, optional position and minimum rating. Not a recommendation or guaranteed profit."
+ },
+ {
+  "name": "/watch",
+  "category": "alerts",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Save an exact card to your private cross-device watchlist.",
+  "example": "/watch player:Romeo Lavia 78",
+  "options": "player — exact card. Current development allowance: up to 100 saved cards."
+ },
+ {
+  "name": "/unwatch",
+  "category": "alerts",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Remove a player from your own watchlist.",
+  "example": "/unwatch player:Romeo Lavia 78",
+  "options": "player — exact card."
+ },
+ {
+  "name": "/watchlist",
+  "category": "alerts",
+  "status": "first",
+  "plan": "Development access",
+  "description": "See the first ten fresh-priced items in your private watchlist, with coin prices and movements.",
+  "example": "/watchlist",
+  "options": "The dashboard shows the full saved list; unavailable prices are withheld."
+ },
+ {
+  "name": "/compare",
+  "category": "prices",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Compare two exact cards with artwork, rating, position, BIN, freshness and after-tax sale value.",
+  "example": "/compare first:Romeo Lavia 78 second:Christian Witzig 71",
+  "options": "first and second — choose exact cards using autocomplete."
+ },
+ {
+  "name": "/dashboard",
+  "category": "server",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Open the live member workspace. Server managers also get branding, channel publishing and activity controls.",
+  "example": "/dashboard",
+  "options": "Requires PUBLIC_URL and dashboard OAuth configuration on the hosting service."
+ },
+ {
+  "name": "/help",
+  "category": "server",
+  "status": "first",
+  "plan": "Development access",
+  "description": "Show the full implemented tool menu with usage hints.",
+  "example": "/help",
+  "options": "No options."
+ },
+ {
+  "name": "/movementalert",
+  "category": "alerts",
+  "status": "planned",
+  "plan": "Roadmap",
+  "description": "Percentage-movement targets over a selected time window.",
+  "example": "/movementalert",
+  "options": "Not implemented. Fixed price targets are available now."
+ },
+ {
+  "name": "/squadbudget",
+  "category": "alerts",
+  "status": "planned",
+  "plan": "Roadmap",
+  "description": "A combined squad shopping-list budget target.",
+  "example": "/squadbudget",
+  "options": "Not implemented."
+ },
+ {
+  "name": "/sales",
+  "category": "market",
+  "status": "planned",
+  "plan": "Roadmap",
+  "description": "Sale-level analytics with source freshness and sample sizes.",
+  "example": "/sales",
+  "options": "Not implemented. Current tools read the player catalogue and BIN history."
+ },
+ {
+  "name": "/feed setup",
+  "category": "server",
+  "status": "planned",
+  "plan": "Roadmap",
+  "description": "Automatic external news and X source routing.",
+  "example": "/feed setup",
+  "options": "Not implemented. Access depends on provider credentials and entitlements."
+ },
+ {
+  "name": "/server pro",
+  "category": "server",
+  "status": "planned",
+  "plan": "Roadmap",
+  "description": "Subscription-backed server sponsored seats.",
+  "example": "/server pro",
+  "options": "Not implemented. Checkout, billing and premium role entitlements are not enabled."
+ },
+ {
+  "name": "/digest setup",
+  "category": "server",
+  "status": "planned",
+  "plan": "Roadmap",
+  "description": "Scheduled daily channel summaries.",
+  "example": "/digest setup",
+  "options": "Not implemented. Admins can manually publish a fresh fodder board now."
+ }
 ];
 let filter='all',search='';
-function renderCommands(){if(!$('#commands'))return;const list=commandData.filter(c=>(filter==='all'||filter==='first'&&c.status==='first'||c.category===filter)&&[c.name,c.description,c.example,c.options].join(' ').toLowerCase().includes(search.toLowerCase()));$('#command-count').textContent=`${list.length} of ${commandData.length} commands · 6 implemented in first build`;$('#commands').innerHTML=list.length?list.map(c=>`<article class="command-card"><div class="command-card-header"><h3>${c.name}</h3><span class="command-status ${c.status==='planned'?'planned':''}">${c.status==='first'?'First build':'Roadmap'}</span></div><p>${c.description}</p><div class="command-example"><code>${esc(c.example)}</code><button data-copy="${esc(c.example)}" aria-label="Copy ${c.name} example">Copy ↗</button></div><div class="command-option"><b>${esc(c.plan)}</b><br>${esc(c.options)}</div></article>`).join(''):'<div class="empty">No commands match. Try a different keyword or category.</div>';$$('[data-copy]').forEach(b=>b.onclick=async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);toast('Command example copied.');}catch{toast('Clipboard unavailable. Select the example text to copy it.');}});}
+function renderCommands(){if(!$('#commands'))return;const list=commandData.filter(c=>(filter==='all'||filter==='first'&&c.status==='first'||c.category===filter)&&[c.name,c.description,c.example,c.options].join(' ').toLowerCase().includes(search.toLowerCase()));$('#command-count').textContent=`${list.length} of ${commandData.length} commands · 17 implemented commands`;$('#commands').innerHTML=list.length?list.map(c=>`<article class="command-card"><div class="command-card-header"><h3>${c.name}</h3><span class="command-status ${c.status==='planned'?'planned':''}">${c.status==='first'?'First build':'Roadmap'}</span></div><p>${c.description}</p><div class="command-example"><code>${esc(c.example)}</code><button data-copy="${esc(c.example)}" aria-label="Copy ${c.name} example">Copy ↗</button></div><div class="command-option"><b>${esc(c.plan)}</b><br>${esc(c.options)}</div></article>`).join(''):'<div class="empty">No commands match. Try a different keyword or category.</div>';$$('[data-copy]').forEach(b=>b.onclick=async()=>{try{await navigator.clipboard.writeText(b.dataset.copy);toast('Command example copied.');}catch{toast('Clipboard unavailable. Select the example text to copy it.');}});}
 $$('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;$$('[data-filter]').forEach(t=>{t.classList.toggle('active',t===b);t.setAttribute('aria-pressed',String(t===b));});renderCommands();});if($('#command-search'))$('#command-search').oninput=e=>{search=e.target.value;renderCommands();};renderCommands();
 const line='<svg viewBox="0 0 430 100" role="img" aria-label="Illustrative price history"><path d="M0 20H430M0 50H430M0 80H430" stroke="#344b7e" stroke-dasharray="3 5"/><path d="M3 18L25 25L48 19L71 31L94 25L117 40L140 33L163 45L186 40L209 55L232 51L255 66L278 61L301 72L324 64L347 80L370 75L393 85L426 78" fill="none" stroke="#ff5b00" stroke-width="2.5" stroke-linecap="round"/></svg>';
 const walks={price:{n:'01 / FIND THE EXACT VERSION',title:'Start with a name.<br>Get the whole picture.',text:'Search a player, choose the correct card and see its price with artwork and a readable trend. Every live result will show when the price was observed.',code:'/price player:Romeo Lavia 78',display:`<div class="demo-display-head"><span>PLAYER PRICE</span><span>FC27 · EXAMPLE</span></div><div class="demo-minirow"><img src="/assets/lavia.webp" alt="Lavia gold card"><div><b>Romeo Lavia</b><small>78 CDM · Gold rare</small></div><div class="demo-bigprice">850<small style="text-align:right">coins</small></div></div><div class="demo-spark">${line}</div><div class="foot">Example prices and history. Actual card artwork.</div>`},watch:{n:'02 / YOUR OWN MARKET RADAR',title:'Keep the cards you want<br>in one place.',text:'Build a squad shopping list or follow your next upgrade. See the cards together, then set individual targets. Watchlist commands are planned; try the local version in the dashboard.',code:'/watch add player:Romeo Lavia 78 list:My squad',display:'<div class="demo-display-head"><span>MY SQUAD WATCHLIST</span><span>ILLUSTRATIVE</span></div><div class="watch-row"><b>Romeo Lavia · 78 CDM</b><span>850 coins</span></div><div class="watch-row"><b>Christian Witzig · 71 LM</b><span>400 coins</span></div><div class="watch-row"><b>Combined price</b><span>1,250 coins</span></div><div class="foot">Save and edit example watchlists in the dashboard demo.</div>'},alert:{n:'03 / YOUR TARGET. YOUR NOTIFICATION.',title:'Let the target<br>come to you.',text:'Choose an at-or-below or at-or-above target. The alert service watches fresh price observations and privately messages you when the condition is met. Live Discord delivery awaits setup.',code:'/alert player:Romeo Lavia 78 direction:below target:750',display:'<div class="demo-display-head"><span>PRIVATE PRICE ALERT</span><span>EXAMPLE MESSAGE</span></div><div style="border-left:3px solid #ff5b00;padding:10px 18px;background:#15366f;border-radius:4px"><span style="font-size:9px;letter-spacing:1.2px;color:#ff5b00">✓ YOUR TARGET WAS REACHED</span><h3 style="font-size:22px;margin-top:13px">Romeo Lavia</h3><p style="font-size:11px;margin-top:8px;color:#b7c8e4">Your target: at or below 750 coins</p><div style="font-size:36px;margin-top:10px;letter-spacing:-1px;color:#f3f4ee">700 <small style="font-size:11px">coins</small></div></div><div class="foot">Sample message. No notification has been sent.</div>'}};

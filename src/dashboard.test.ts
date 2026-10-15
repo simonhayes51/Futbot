@@ -4,8 +4,8 @@ import {readFile} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
 
 test('dashboard supports the saved-alert, watchlist, feed and branding workflows',async()=>{
- const html=await readFile(new URL('../dist/app/index.html',import.meta.url),'utf8');
- const code=await readFile(new URL('../dist/app/app.js',import.meta.url),'utf8');
+ const html=await readFile(new URL('../dist/demo/index.html',import.meta.url),'utf8');
+ const code=await readFile(new URL('../dist/demo/app.js',import.meta.url),'utf8');
  const dom=new JSDOM(html,{url:'https://futbot.test/',runScripts:'outside-only',pretendToBeVisual:true});
  const w=dom.window as any;
  w.structuredClone=structuredClone;
