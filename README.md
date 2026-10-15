@@ -87,3 +87,7 @@ Automated checks cover market grouping/cache/freshness, chart generation, auth/p
 ## Still outside this build
 
 Payments, sponsored Pro seats, entitlement enforcement, X/TweetShift-style ingestion, recurring digest scheduling, sales-history analytics, percentage-movement alerts, squad budget targets and automated trading are not implemented. The pricing page is proposed launch pricing, not an active checkout. Development watchlist allowance is 100; subscription tiers are not enforced. The command guide labels remaining ideas as roadmap.
+
+## Runtime diagnostics
+
+The current startup log reports 17 commands. A log reporting 6 commands is an older deployment. Redeploy the latest `main` revision. Database pools have finite connection/statement timeouts and idle error listeners. Alert failures report a redacted error code and actionable hint (including disk-full, connection resets, restarts and query timeouts), without printing connection strings. Receiving SIGTERM means the host asked the process to stop; check deployment/host events to establish why. Fontconfig discovery is bundled with the renderer.

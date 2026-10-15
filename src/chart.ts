@@ -1,3 +1,4 @@
+import './font-config.js';
 import sharp from 'sharp';
 import { fileURLToPath } from 'node:url';
 import { escapeXml, coins } from './domain.js';

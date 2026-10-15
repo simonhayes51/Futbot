@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {errorDetails} from './logging.js';
+test('database failures identify storage and connection problems without exposing secrets',()=>{assert.match(errorDetails({code:'53100',message:'password=secret'}).hint,/disk full/);assert.match(errorDetails({code:'ECONNRESET'}).hint,/reset/);assert.equal(errorDetails(new Error('Connection terminated unexpectedly')).code,'CONNECTION_CLOSED');assert(!JSON.stringify(errorDetails(new Error('postgresql://user:secret@host/db'))).includes('secret'));});

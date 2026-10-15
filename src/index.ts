@@ -1,11 +1,12 @@
 import 'dotenv/config';
+import {logFailure} from './logging.js';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {MarketService} from './market.js';
 import {startWeb} from './web.js';
 import type {Server} from 'node:http';
 import {extraCommands,handleTool} from './tools.js';
 import {guildSettings,defaultBrand,watch,type GuildSettings} from './settings.js';
-import { Client, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, type Interaction } from 'discord.js';
+import { Client, MessageFlags, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, type Interaction } from 'discord.js';
 import { PriceRepository } from './prices.js';
 import { AlertRepository,alertTick,type Alert } from './alerts.js';
 import { coins,isFresh,tradeProfit,type Direction,type Card } from './domain.js';
@@ -76,17 +77,17 @@ async function handle(i:Interaction){
   }
   if(i.isButton()){
     const [action,id,hours]=i.customId.split(':');if(!/^\d+$/.test(id||''))return;
-    if(action==='watch'){await i.deferReply({ephemeral:true});await resolveCard(id);await watch(alerts.pool,i.user.id,id,year,platform);await i.editReply('⭐ Card added to your private watchlist. Use /watchlist or /dashboard.');return;}
+    if(action==='watch'){await i.deferReply({flags:MessageFlags.Ephemeral});await resolveCard(id);await watch(alerts.pool,i.user.id,id,year,platform);await i.editReply('⭐ Card added to your private watchlist. Use /watchlist or /dashboard.');return;}
     if(action==='newalert'||action==='abovealert'){
       const modal=new ModalBuilder().setCustomId(`alertmodal:${id}:${action==='abovealert'?'above':'below'}`).setTitle('Set your price target');
       const target=new TextInputBuilder().setCustomId('target').setLabel(action==='abovealert'?'Notify at or above this price (coins)':'Notify at or below this price (coins)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8);
       modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(target));await i.showModal(modal);return;
     }
-    if(action==='history'){await i.deferReply({ephemeral:true});await i.editReply(await showPrice(await resolveCard(id),hours==='168'?168:24));return;}
+    if(action==='history'){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showPrice(await resolveCard(id),hours==='168'?168:24));return;}
   }
-  if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({ephemeral:true});await i.editReply({embeds:[await createAlert(i,i.customId.split(':')[1],i.customId.split(':')[2]==='above'?'above':'below',Number(i.fields.getTextInputValue('target')))]});return;}
+  if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply({embeds:[await createAlert(i,i.customId.split(':')[1],i.customId.split(':')[2]==='above'?'above':'below',Number(i.fields.getTextInputValue('target')))]});return;}
   if(!i.isChatInputCommand())return;
-  await i.deferReply({ephemeral:!['price','fodder','movers','budget','compare'].includes(i.commandName)});
+  await i.deferReply({flags:!['price','fodder','movers','budget','compare'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
   if(extraCommands.some(c=>c.name===i.commandName)){await handleTool(i,market,alerts,brand,resolveCard);return;}
   if(i.commandName==='testdm'){try{await i.user.send({embeds:[brand().setTitle('NOTIFICATIONS / CONNECTED').setDescription('FutBot can reach your DMs. Price alerts will arrive here when a fresh observed price meets your target.')]});await i.editReply('Test notification sent. Check your DMs.');}catch{await i.editReply('I could not send you a DM. Enable direct messages from this server, check that FutBot is not blocked, then run /testdm again.');}}
   if(i.commandName==='price')await i.editReply(await showPrice(await resolveCard(i.options.getString('player',true))));
@@ -96,7 +97,7 @@ async function handle(i:Interaction){
   if(i.commandName==='tax'){const buy=i.options.getInteger('buy',true),sell=i.options.getInteger('sell',true),quantity=i.options.getInteger('quantity')||1,r=tradeProfit(buy,sell,quantity);await i.editReply({embeds:[brand().setTitle('🧮 YOUR TRADE RECEIPT').setDescription(`**${quantity} cop${quantity===1?'y':'ies'}** · Buy ${coins(buy)} / Sell ${coins(sell)}`).addFields({name:'PROFIT AFTER TAX',value:(r.profit>=0?'+':'')+coins(r.profit)+' coins',inline:true},{name:'TOTAL EA TAX',value:coins(r.tax)+' coins',inline:true},{name:'BREAK-EVEN / COPY',value:coins(r.breakEven)+' coins',inline:true}).setImage('attachment://receipt.png')],files:[new AttachmentBuilder(await tradeReceipt(buy,sell,quantity),{name:'receipt.png'})]});}
 
 }
-client.on('interactionCreate',i=>{guildSettings(alerts.pool,i.guildId).then(b=>context.run(b,()=>handle(i))).catch(async e=>{const message=e instanceof Error&& !('code' in e)?e.message:'Something went wrong. Please try again shortly.';if(i.isAutocomplete()){await i.respond([]).catch(()=>{});return;}if(i.isRepliable()){if(i.deferred||i.replied)await i.editReply({content:message,embeds:[],components:[]}).catch(()=>{});else await i.reply({content:message,ephemeral:true}).catch(()=>{});}});});
+client.on('interactionCreate',i=>{guildSettings(alerts.pool,i.guildId).then(b=>context.run(b,()=>handle(i))).catch(async e=>{const message=e instanceof Error&& !('code' in e)?e.message:'Something went wrong. Please try again shortly.';if(i.isAutocomplete()){await i.respond([]).catch(()=>{});return;}if(i.isRepliable()){if(i.deferred||i.replied)await i.editReply({content:message,embeds:[],components:[]}).catch(()=>{});else await i.reply({content:message,flags:MessageFlags.Ephemeral}).catch(()=>{});}});});
 let timer:NodeJS.Timeout|undefined,busy=false;
 let web:Server|undefined;
 client.on('error',e=>console.error('Discord client error:',e.message));
@@ -109,10 +110,10 @@ async function startBot(){
   console.log(`FutBot ready · FC${year} · ${platform} · ${commands.length} commands`);
   const tick=async()=>{if(busy)return;busy=true;try{await alertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{
     const user=await client.users.fetch(userId);const b=await guildSettings(alerts.pool,(a as any).guild_id);await context.run(b,()=>user.send({nonce:`fb${a.id}`,enforceNonce:true,embeds:[brand().setTitle('Your price target was reached').setDescription(`**${a.card_name}** · ${a.platform.toUpperCase()}`).addFields({name:'Observed price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`})]}));
-  });}catch{console.error('Alert cycle failed. Check database connectivity.');}finally{busy=false;}};
+  });}catch(error){logFailure('Alert cycle failed',error);}finally{busy=false;}};
   timer=setInterval(()=>void tick(),pollMs);await tick();
 }
 async function stop(code=0){if(web)web.close();if(timer)clearInterval(timer);client.destroy();await Promise.all([prices.pool.end(),alerts.pool.end()]);process.exit(code);}
-process.on('SIGTERM',()=>void stop());process.on('SIGINT',()=>void stop());
+process.on('SIGTERM',()=>{console.log('Received SIGTERM; shutting down FutBot.');void stop();});process.on('SIGINT',()=>{console.log('Received SIGINT; shutting down FutBot.');void stop();});
 await Promise.all([prices.pool.query('SELECT 1'),alerts.pool.query('SELECT 1 FROM futbot_alerts LIMIT 0')]);
 await client.login(process.env.DISCORD_TOKEN);

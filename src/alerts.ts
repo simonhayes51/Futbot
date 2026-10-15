@@ -1,10 +1,11 @@
 import pg from 'pg';
+import {logFailure} from './logging.js';
 import { isFresh, meetsTarget, type Direction } from './domain.js';
 import type { PriceRepository } from './prices.js';
 export type Alert = {id:string;user_id:string;card_id:string;card_name:string;platform:string;game_year:number;direction:Direction;target:string;state:string};
 export class AlertRepository {
   pool:pg.Pool;
-  constructor(url:string){this.pool=new pg.Pool({connectionString:url,max:4,application_name:'futbot-app'});}
+  constructor(url:string){this.pool=new pg.Pool({connectionString:url,max:4,application_name:'futbot-app',connectionTimeoutMillis:10000,idleTimeoutMillis:30000,keepAlive:true,statement_timeout:15000});this.pool.on('error',error=>logFailure('Application database idle connection error',error));}
   async list(userId:string){return (await this.pool.query<Alert>(`SELECT * FROM futbot_alerts WHERE user_id=$1 AND state IN ('active','queued','paused','failed') ORDER BY id DESC LIMIT 25`,[userId])).rows;}
   async create(input:{userId:string;guildId:string|null;cardId:string;cardName:string;year:number;platform:string;direction:Direction;target:number},limit=5){
     const c=await this.pool.connect();
@@ -32,14 +33,14 @@ export async function alertTick(repo:AlertRepository,prices:PriceRepository,maxA
         const claimed=await c.query(`UPDATE futbot_alerts SET state='queued' WHERE id=$1 AND state='active' RETURNING id`,[a.id]);
         if(claimed.rowCount)await c.query(`INSERT INTO futbot_outbox(alert_id,observed_price,captured_at) VALUES($1,$2,$3) ON CONFLICT(alert_id) DO NOTHING`,[a.id,price.value,price.capturedAt]);
         await c.query('COMMIT');
-      }catch(e){await c.query('ROLLBACK');console.error('Alert check failed for',a.id);}
+      }catch(e){await c.query('ROLLBACK');logFailure('Alert price check failed / alert '+a.id,e);}
     }
     const pending=await c.query(`SELECT o.id AS outbox_id,o.observed_price,o.captured_at,o.attempts,a.* FROM futbot_outbox o JOIN futbot_alerts a ON a.id=o.alert_id WHERE o.status='pending' AND o.retry_at<=now() AND a.state='queued' ORDER BY o.id LIMIT 50`);
     for(const row of pending.rows){
       try{await send(row.user_id,row,Number(row.observed_price),row.captured_at);
         await c.query('BEGIN');await c.query(`UPDATE futbot_outbox SET status='delivered' WHERE id=$1`,[row.outbox_id]);
         await c.query(`UPDATE futbot_alerts SET state='triggered',triggered_at=now() WHERE id=$1`,[row.id]);await c.query('COMMIT');
-      }catch(e){await c.query('ROLLBACK');const failed=row.attempts>=4;
+      }catch(e){logFailure('Alert delivery failed / alert '+row.id,e);await c.query('ROLLBACK');const failed=row.attempts>=4;
         await c.query(`UPDATE futbot_outbox SET attempts=attempts+1,status=$2,retry_at=now()+interval '5 minutes',last_error=$3 WHERE id=$1`,[row.outbox_id,failed?'failed':'pending',e instanceof Error?e.name:'DeliveryError']);
         if(failed)await c.query(`UPDATE futbot_alerts SET state='failed' WHERE id=$1`,[row.id]);
       }

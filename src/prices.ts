@@ -1,10 +1,12 @@
 import pg from 'pg';
+import {logFailure} from './logging.js';
 import type { Card, Price } from './domain.js';
 export class PriceRepository {
   pool: pg.Pool;
   constructor(url: string, public year = 27) {
-    this.pool = new pg.Pool({ connectionString: url, max: 4, statement_timeout: 8000,
+    this.pool = new pg.Pool({ connectionString: url, max: 4, statement_timeout: 8000, connectionTimeoutMillis:10000, idleTimeoutMillis:30000, keepAlive:true,
       options: '-c default_transaction_read_only=on', application_name: 'futbot-price-reader' });
+    this.pool.on('error',error=>logFailure('Price database idle connection error',error));
   }
   async search(query: string): Promise<Card[]> {
     const term = query.replace(/[\\%_]/g, '\\$&').slice(0, 80);
