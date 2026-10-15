@@ -21,20 +21,20 @@ test('homepage walkthrough and mobile menu respond',async()=>{
  $('[data-privacy]').click();assert($('#privacy-dialog').hasAttribute('open'));
  dom.window.close();
 });
-test('pricing calculates annual totals and sponsored seat tiers consistently',async()=>{
+test('pricing shows implemented monthly limits and sponsored seat tiers consistently',async()=>{
  const {dom,w,$}=await load('pricing/');
  assert.match($('#plans').textContent,/£3.99/);
  $('#seat-count').value='100';$('#seat-count').dispatchEvent(new w.Event('change',{bubbles:true}));
  assert.match($('#plans').textContent,/£49.99/);
- $('[data-billing="annual"]').click();assert.match($('#plans').textContent,/£39.90 billed yearly/);assert.match($('#plans').textContent,/£499.90 billed yearly/);
- $('[data-plan="complete"]').click();assert.match($('#chosen-plan').textContent,/100 sponsored seats/);assert.match($('#chosen-description').textContent,/£499.90\/year/);
+ assert.match($('#plans').textContent,/25 editable personal price alerts/);assert.equal($('[data-billing="annual"]'),null);
+ $('[data-plan="complete"]').click();assert.match($('#chosen-plan').textContent,/100 sponsored seats/);assert.match($('#chosen-description').textContent,/£49.99\/month/);
  assert.match($('#plan-dialog').textContent,/No payment is being taken/);
  dom.window.close();
 });
 test('command guide filters implemented commands, searches and copies examples',async()=>{
  const {dom,w,$}=await load('commands/');
- assert.equal(w.document.querySelectorAll('.command-card').length,23);
- $('[data-filter="first"]').click();assert.equal(w.document.querySelectorAll('.command-card').length,17);
+ assert.equal(w.document.querySelectorAll('.command-card').length,24);
+ $('[data-filter="first"]').click();assert.equal(w.document.querySelectorAll('.command-card').length,20);
  $('#command-search').value='/removealert';$('#command-search').dispatchEvent(new w.Event('input',{bubbles:true}));
  assert.equal(w.document.querySelectorAll('.command-card').length,1);
  let copied='';Object.defineProperty(w.navigator,'clipboard',{value:{writeText:async(s:string)=>{copied=s;}}});
@@ -51,7 +51,7 @@ test('marketing navigation and local assets point to existing files',async()=>{
   for(const el of dom.window.document.querySelectorAll('[href],[src]')){
    const url=el.getAttribute('href')||el.getAttribute('src')||'';
    if(!url.startsWith('/'))continue;
-   const path=url.split('#')[0];const file=path.endsWith('/')?path+'index.html':path;
+   const path=url.split('#')[0].split('?')[0];const file=path.endsWith('/')?path+'index.html':path;
    await access(new URL('../dist'+file,import.meta.url));
   }dom.window.close();
  }

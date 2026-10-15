@@ -7,10 +7,10 @@ export function fodderRows(cards:MarketCard[],rating?:number){const ratings=rati
 export function completeCard(c:MarketCard){return !!c.name?.trim()&&!/^unknown(?: card| player)?$/i.test(c.name.trim())&&Number.isInteger(c.rating)&&c.rating!>=1&&c.rating!<=99&&!!c.position&&Number.isFinite(c.value)&&c.value>0;}
 export function movers(cards:MarketCard[],direction='risers'){return cards.filter(c=>completeCard(c)&&(c.rating??0)>=80&&c.value>=1000&&c.change!==null&&(direction==='fallers'?c.change<0:c.change>0)).sort((a,b)=>direction==='fallers'?a.change!-b.change!:b.change!-a.change!).slice(0,10);}
 export class MarketService{
- private cached:{at:number;cards:MarketCard[]}|undefined;private pending:Promise<MarketCard[]>|undefined;
+ private cached:{at:number;bucket:number;cards:MarketCard[]}|undefined;private pending:Promise<MarketCard[]>|undefined;
  constructor(public prices:PriceRepository,public platform:string,public maxAge=15){}
- async snapshot(){if(this.cached&&Date.now()-this.cached.at<300000)return this.cached.cards.filter(c=>isFresh(c.capturedAt,this.maxAge));if(this.pending)return this.pending;
- this.pending=this.load().then(cards=>{this.cached={at:Date.now(),cards};return cards;}).finally(()=>{this.pending=undefined;});return this.pending;}
+ async snapshot(){const bucket=Math.floor((Date.now()-60000)/300000);if(this.cached&&this.cached.bucket===bucket&&Date.now()-this.cached.at<300000)return this.cached.cards.filter(c=>isFresh(c.capturedAt,this.maxAge));if(this.pending)return this.pending;
+ this.pending=this.load().then(cards=>{this.cached={at:Date.now(),bucket,cards};return cards;}).finally(()=>{this.pending=undefined;});return this.pending;}
  private async load():Promise<MarketCard[]>{
  const {rows}=await this.prices.pool.query(`SELECT p.source_card_id::text AS id,
  COALESCE(p.display_name,p.name,p.full_name,'Unknown card') AS name,

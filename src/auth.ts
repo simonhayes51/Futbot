@@ -24,7 +24,7 @@ export async function discord(path:string,token:string,method='GET',body?:unknow
  const r=await fetch('https://discord.com/api/v10'+path,{method,headers:{Authorization:`${bearer?'Bearer':'Bot'} ${token}`,...(body?{'Content-Type':'application/json'}:{})},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(12000)});
  if(r.headers.get('X-RateLimit-Remaining')==='0'){const reset=Number(r.headers.get('X-RateLimit-Reset-After'));if(Number.isFinite(reset)&&reset>0)cooldowns.set(key,Date.now()+reset*1000+50);}
  if(r.status===429){const data=await r.json().catch(()=>({})) as any;const seconds=Number(r.headers.get('Retry-After')??data.retry_after??1);const delay=Number.isFinite(seconds)&&seconds>=0?seconds*1000+50:1000;cooldowns.set(data.global?identity:key,Date.now()+delay);if(attempt===0&&delay<=20000)continue;throw new HttpError(429,`Discord rate limit: try again in ${Math.ceil(delay/1000)} seconds.`);}
- if(!r.ok)throw new HttpError(r.status===401?401:502,r.status===401?'Your Discord session expired. Sign in again.':'Discord could not complete this request. Check bot membership and permissions.');
+ if(!r.ok)throw new HttpError(r.status===401?401:r.status===404?404:502,r.status===401?'Your Discord session expired. Sign in again.':'Discord could not complete this request. Check bot membership and permissions.');
  const value=r.status===204?null:await r.json();if(method==='GET')discordReads.set(key,{until:Date.now()+10000,value});
  if(discordReads.size>1000)for(const [k,v]of discordReads)if(v.until<Date.now())discordReads.delete(k);if(discordReads.size>2000)discordReads.clear();
  if(cooldowns.size>2000)for(const [k,v]of cooldowns)if(v<Date.now())cooldowns.delete(k);
@@ -33,11 +33,11 @@ export async function discord(path:string,token:string,method='GET',body?:unknow
  }
  const work=request();if(method==='GET')pendingReads.set(key,work);try{return await work;}finally{if(method==='GET')pendingReads.delete(key);}
 }
-export function channelPermissions(guild:any,roles:any[],member:any,channel:any){
+export function channelPermissions(guild:any,roles:any[],member:any,channel:any,images=false){
  let p=BigInt(roles.find(r=>r.id===guild.id)?.permissions??'0');for(const r of roles)if(member.roles.includes(r.id))p|=BigInt(r.permissions);
  if(guild.owner_id===member.user?.id||(p&8n)!==0n)return true;
  const overwrites=channel.permission_overwrites??[];const everyone=overwrites.find((o:any)=>o.id===guild.id);if(everyone)p=(p&~BigInt(everyone.deny))|BigInt(everyone.allow);
  let deny=0n,allow=0n;for(const o of overwrites)if(o.type===0&&member.roles.includes(o.id)){deny|=BigInt(o.deny);allow|=BigInt(o.allow);}p=(p&~deny)|allow;
  const personal=overwrites.find((o:any)=>o.type===1&&o.id===member.user.id);if(personal)p=(p&~BigInt(personal.deny))|BigInt(personal.allow);
- const required=1024n|2048n|16384n;return (p&required)===required;
+ const required=1024n|2048n|16384n|(images?32768n:0n);return (p&required)===required;
 }

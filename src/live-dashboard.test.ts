@@ -1,7 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';import {JSDOM} from 'jsdom';
 const tick=()=>new Promise(r=>setTimeout(r,15));
-test('live dashboard loads real API responses and saves private alerts and server branding',async()=>{
- const dom=new JSDOM(await readFile(new URL('../dist/app/index.html',import.meta.url),'utf8'),{url:'https://futbot.test/app/',runScripts:'outside-only'});const w=dom.window as any;w.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};w.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');};const calls:any[]=[];
+test('live dashboard loads real API responses and saves private alerts and server branding',async t=>{
+ const dom=new JSDOM(await readFile(new URL('../dist/app/index.html',import.meta.url),'utf8'),{url:'https://futbot.test/app/',runScripts:'outside-only'});t.after(()=>dom.window.close());const w=dom.window as any;w.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};w.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');};const calls:any[]=[];
  const card={id:'123',name:'Test <player>',rating:85,position:'CM',rarity:'Gold',value:2000,change:-4,image:null};
  w.fetch=async(url:string,opts:any={})=>{calls.push({url,opts});const endpoint=url.replace('/api/','');let d:any={ok:true};if(endpoint==='me')d={user:{id:'member',name:'Simon'},csrf:'token',year:27,platform:'ps5',alertLimit:3};if(endpoint==='market')d={freshCards:100,fodder:[{rating:85,cards:[card]}],risers:[],fallers:[]};if(endpoint==='alerts')d={alerts:[]};if(endpoint==='watchlist')d={cards:[card]};if(endpoint==='investments')d={holdings:[]};if(endpoint==='guilds')d={guilds:[{id:'123456789012345678',name:'Club'}]};if(endpoint.endsWith('/settings'))d={name:'Club',accent:'#1638c5',footer:'Footer',settings:{}};if(endpoint.endsWith('/channels'))d={channels:[]};return {ok:true,status:200,json:async()=>d};};
  w.eval(await readFile(new URL('../dist/app/live.js',import.meta.url),'utf8'));await tick();assert.equal(w.document.querySelector('#shell').hidden,false);assert.match(w.document.querySelector('#main').textContent,/100/);
@@ -11,8 +11,23 @@ test('live dashboard loads real API responses and saves private alerts and serve
  dom.window.close();
 });
 
-test('market failure leaves the calculator and authorized server selector usable',async()=>{
- const dom=new JSDOM(await readFile(new URL('../dist/app/index.html',import.meta.url),'utf8'),{url:'https://futbot.test/app/',runScripts:'outside-only'});const w=dom.window as any;
+test('market failure leaves the calculator and authorized server selector usable',async t=>{
+ const dom=new JSDOM(await readFile(new URL('../dist/app/index.html',import.meta.url),'utf8'),{url:'https://futbot.test/app/',runScripts:'outside-only'});t.after(()=>dom.window.close());const w=dom.window as any;
  w.fetch=async(url:string)=>{const p=url.replace('/api/','');const data:any={me:{user:{id:'u',name:'Simon'},csrf:'t',year:27,platform:'ps5',alertLimit:3},market:{error:'Query timed out (code 57014)'},alerts:{alerts:[]},watchlist:{cards:[]},investments:{holdings:[]},guilds:{guilds:[{id:'123456789012345678',name:'My club'}]}};return {ok:p!=='market',status:p==='market'?503:200,json:async()=>data[p]};};
  w.eval(await readFile(new URL('../dist/app/live.js',import.meta.url),'utf8'));await tick();assert.match(w.document.querySelector('#main').textContent,/57014/);assert.equal(w.document.querySelector('#guild').options.length,2);w.document.querySelector('nav [data-page=calculator]').click();await tick();assert(w.document.querySelector('#tax-form'));assert.match(w.document.querySelector('#tax-result').textContent,/14,000/);dom.window.close();
+});
+
+test('alerts edit existing targets and feed editor previews before enabling a schedule',async t=>{
+ const dom=new JSDOM(await readFile(new URL('../dist/app/index.html',import.meta.url),'utf8'),{url:'https://futbot.test/app/',runScripts:'outside-only'});t.after(()=>dom.window.close());const w=dom.window as any;w.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};w.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');};
+ const calls:any[]=[];const g='123456789012345678';const card={id:'123',name:'Kika Nazareth',rating:83,position:'CM',rarity:'Gold',image:'https://example.com/card.png',value:21000,change:-5};
+ w.fetch=async(url:string,opts:any={})=>{calls.push({url,opts});const p=url.replace('/api/','');let d:any={ok:true};
+ if(p==='me')d={user:{id:'member',name:'Simon'},csrf:'csrf',year:27,platform:'ps5',alertLimit:25,watchLimit:100};
+ if(p==='market')d={freshCards:1,fodder:[],risers:[],fallers:[]};if(p==='watchlist')d={cards:[]};if(p==='investments')d={holdings:[]};if(p==='guilds')d={guilds:[{id:g,name:'Club'}]};
+ if(p==='alerts')d={alerts:[{id:'1',card_id:'123',card_name:card.name,card,platform:'ps5',target:26000,direction:'above',state:'active',currentPrice:21000,priceFresh:true,gap:5000,created_at:new Date().toISOString()}]};
+ if(p.endsWith('/feeds'))d={feeds:[],runs:[]};if(p.endsWith('/channels'))d={channels:[{id:g,name:'market'}]};if(p.endsWith('/roles'))d={roles:[]};if(p.endsWith('/shared'))d={lists:[]};if(p.endsWith('/feed-preview'))d={payload:{embeds:[{author:{name:'Club'},title:'Fodder',color:3430655,footer:{text:'Club market'}}]},cards:[card],hasImage:false,nextRun:'2026-10-16T17:05:00Z'};
+ return {ok:true,status:200,json:async()=>d};};
+ w.eval(await readFile(new URL('../dist/app/live.js',import.meta.url),'utf8'));await tick();w.document.querySelector('nav [data-page=alerts]').click();await tick();assert.match(w.document.querySelector('#main').textContent,/26,000/);assert.match(w.document.querySelector('#main').textContent,/21,000/);assert(w.document.querySelector('.player-name img'));
+ w.document.querySelector('[data-edit-alert]').click();const a=w.document.querySelector('#alert-form');a.elements.target.value='25000';a.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();const patch=calls.find(c=>c.url==='/api/alerts'&&c.opts.method==='PATCH');assert.equal(JSON.parse(patch.opts.body).id,'1');assert.equal(JSON.parse(patch.opts.body).target,25000);
+ const select=w.document.querySelector('#guild');select.value=g;select.dispatchEvent(new w.Event('change'));await tick();w.document.querySelector('nav [data-page=feeds]').click();await tick();const f=w.document.querySelector('#feed-form');f.elements.name.value='Daily brief';f.elements.channel_id.value=g;assert.equal(f.elements.enabled.checked,false);w.document.querySelector('#preview-feed').click();await tick();assert.match(w.document.querySelector('#scheduled-preview').textContent,/Kika Nazareth/);assert(!calls.some(c=>c.url.endsWith('/feeds')&&c.opts.method==='POST'));
+ f.elements.enabled.checked=true;f.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();const saved=calls.find(c=>c.url.endsWith('/feeds')&&c.opts.method==='POST');assert.deepEqual(JSON.parse(saved.opts.body).times,['18:05']);assert.equal(JSON.parse(saved.opts.body).enabled,true);
 });

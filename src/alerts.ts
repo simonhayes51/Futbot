@@ -16,6 +16,11 @@ export class AlertRepository {
       await c.query('COMMIT');return rows[0];
     }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
   }
+  async edit(userId:string,id:string,target:number,direction:Direction){
+    if(!Number.isInteger(target)||target<1||target>15000000||!['above','below'].includes(direction))throw new Error('Choose a valid target and direction.');
+    const r=await this.pool.query("UPDATE futbot_alerts SET target=$3,direction=$4 WHERE user_id=$1 AND id=$2 AND state IN ('active','paused') RETURNING id",[userId,id,target,direction]);
+    if(!r.rowCount)throw new Error('Only your active or paused alerts can be edited. The alert may already be queued.');
+  }
   async remove(userId:string,id:string){const r=await this.pool.query(`UPDATE futbot_alerts SET state='cancelled' WHERE id=$1 AND user_id=$2 AND state IN ('active','paused','failed') RETURNING id`,[id,userId]);return !!r.rowCount;}
 }
 export async function alertTick(repo:AlertRepository,prices:PriceRepository,maxAge:number,send:(userId:string,alert:Alert,value:number,capturedAt:Date)=>Promise<void>){

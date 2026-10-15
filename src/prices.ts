@@ -3,6 +3,13 @@ import {logFailure} from './logging.js';
 import type { Card, Price } from './domain.js';
 export class PriceRepository {
   pool: pg.Pool;
+  private reads=new Map<string,{until:number;value:Promise<any>}>();
+  private cached<T>(key:string,ms:number,load:()=>Promise<T>):Promise<T>{
+    const hit=this.reads.get(key);if(hit&&hit.until>Date.now())return hit.value;
+    const value=load().catch(e=>{this.reads.delete(key);throw e;});this.reads.set(key,{until:Date.now()+ms,value});
+    if(this.reads.size>1500){for(const [k,v]of this.reads)if(v.until<Date.now())this.reads.delete(k);if(this.reads.size>2000)this.reads.delete(this.reads.keys().next().value!);}
+    return value;
+  }
   constructor(url: string, public year = 27) {
     this.pool = new pg.Pool({ connectionString: url, max: 4, statement_timeout: 8000, connectionTimeoutMillis:10000, idleTimeoutMillis:30000, keepAlive:true,
       options: '-c default_transaction_read_only=on', application_name: 'futbot-price-reader' });
@@ -20,28 +27,30 @@ export class PriceRepository {
     return rows;
   }
   async card(id: string): Promise<Card | null> {
+    return this.cached('card:'+id,300000,async()=>{
     const { rows } = await this.pool.query(`SELECT source_card_id::text AS id,
       COALESCE(display_name,name,full_name,'Unknown card') AS name,rating,primary_position AS position,rarity,club,
       COALESCE(card_image_stored_url,card_image_url,player_image_url) AS image
       FROM public.futgg_players WHERE source_card_id=$1 AND game_year=$2`, [id,this.year]);
-    return rows[0] || null;
+    return rows[0] || null;});
   }
   async latest(cardId: string, platform: string): Promise<Price | null> {
+    return this.cached('latest:'+platform+':'+cardId,30000,async()=>{
     const { rows } = await this.pool.query(`SELECT source_card_id::text AS "cardId",platform,
       lowest_bin AS value,captured_at AS "capturedAt" FROM public.futgg_bin_history
       WHERE source_card_id=$1 AND platform=$2 AND game_year=$3 AND lowest_bin>0
       ORDER BY captured_at DESC,id DESC LIMIT 1`, [cardId,platform,this.year]);
-    return rows[0] || null;
+    return rows[0]?{...rows[0],value:Number(rows[0].value)}:null;});
   }
   async baseline(cardId:string,platform:string):Promise<{value:number;capturedAt:Date}|null>{
-    const {rows}=await this.pool.query(`SELECT percentile_cont(0.5) WITHIN GROUP(ORDER BY lowest_bin)::int AS value,max(captured_at) AS "capturedAt" FROM public.futgg_bin_history WHERE source_card_id=$1 AND platform=$2 AND game_year=$3 AND lowest_bin>0 AND captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours' HAVING count(*)>=3`,[cardId,platform,this.year]);return rows[0]??null;
+    return this.cached('baseline:'+platform+':'+cardId,300000,async()=>{const {rows}=await this.pool.query(`SELECT percentile_cont(0.5) WITHIN GROUP(ORDER BY lowest_bin)::int AS value,max(captured_at) AS "capturedAt" FROM public.futgg_bin_history WHERE source_card_id=$1 AND platform=$2 AND game_year=$3 AND lowest_bin>0 AND captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours' HAVING count(*)>=3`,[cardId,platform,this.year]);return rows[0]??null;});
   }
   async history(cardId: string, platform: string, hours = 24): Promise<{ at: Date; value: number }[]> {
-    const { rows } = await this.pool.query(`SELECT date_trunc('hour',captured_at) AS at,
+    return this.cached('history:'+platform+':'+cardId+':'+hours,300000,async()=>{const { rows } = await this.pool.query(`SELECT date_trunc('hour',captured_at) AS at,
       percentile_cont(0.5) WITHIN GROUP (ORDER BY lowest_bin)::int AS value
       FROM public.futgg_bin_history WHERE source_card_id=$1 AND platform=$2 AND game_year=$3
       AND captured_at>=now()-($4::int * interval '1 hour') AND lowest_bin>0
       GROUP BY 1 ORDER BY 1`,[cardId,platform,this.year,Math.min(hours,168)]);
-    return rows;
+    return rows;});
   }
 }

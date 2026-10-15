@@ -1,0 +1,53 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {testDatabase} from './test-db.js';
+import {claimSeat,userBenefits,serverPlan} from './plans.js';
+import {nextRun,validateFeed,feedTick,fingerprint,feedPayload} from './feeds.js';
+import {AlertRepository} from './alerts.js';import {watch} from './settings.js';
+const g='123456789012345678';
+test('daily schedules follow London DST and reject invalid destinations and times',()=>{
+ assert.equal(nextRun(['18:05'],'Europe/London',new Date('2026-10-15T12:00:00Z')).toISOString(),'2026-10-15T17:05:00.000Z');
+ assert.equal(nextRun(['18:05'],'Europe/London',new Date('2026-11-15T12:00:00Z')).toISOString(),'2026-11-15T18:05:00.000Z');
+ assert.equal(nextRun(['01:30'],'Europe/London',new Date('2026-03-29T00:31:00Z')).toISOString(),'2026-03-30T00:30:00.000Z');
+ assert.throws(()=>validateFeed({kind:'fodder',name:'Bad',channel_id:g,times:['24:30']}));
+ assert.throws(()=>validateFeed({kind:'watchlist',name:'Bad',channel_id:g,times:['18:05']}));
+ assert.throws(()=>validateFeed({kind:'fodder',name:'Bad',channel_id:g,times:['18:05'],timezone:'Not/AZone'}));
+});
+test('application migrations, limits, ownership and server-seat lifecycle execute against PostgreSQL',async t=>{
+ const {db,pool}=await testDatabase();t.after(()=>db.close());
+ assert.equal((await serverPlan(pool,g)).key,'free');
+ await pool.query("INSERT INTO futbot_subscriptions(scope,scope_id,owner_id,plan,status,paid_until) VALUES('guild',$1,'owner','complete25','active',now()+interval '1 day')",[g]);
+ await pool.query("INSERT INTO futbot_guilds(guild_id,settings) VALUES($1,$2)",[g,{accessRoleIds:['role']}]);
+ await assert.rejects(()=>claimSeat(pool,g,'member',[]),/selected role/);await claimSeat(pool,g,'member',['role']);await claimSeat(pool,g,'member',['role']);
+ assert.equal((await pool.query('SELECT count(*)::int AS n FROM futbot_seats')).rows[0].n,1);
+ assert.equal((await userBenefits(pool,'member',async()=>({roles:['role']}))).alerts,25);
+ await pool.query("INSERT INTO futbot_seats(guild_id,user_id) SELECT $1,'extra-'||n FROM generate_series(1,24) n",[g]);await assert.rejects(()=>claimSeat(pool,g,'newcomer',['role']),/All server Pro seats/);
+ assert.equal((await userBenefits(pool,'member',async()=>({roles:[]}))).plan,'free');
+ assert.equal((await userBenefits(pool,'member',async()=>null)).plan,'free');
+ await pool.query("UPDATE futbot_subscriptions SET status='canceled'");assert.equal((await userBenefits(pool,'member',async()=>({roles:['role']}))).plan,'free');
+ const repo=Object.create(AlertRepository.prototype) as AlertRepository;repo.pool=pool;
+ const input={userId:'member',guildId:g,cardId:'1',cardName:'Exact card',year:27,platform:'ps5',direction:'below' as const,target:1000};
+ const a=await repo.create(input,1);await assert.rejects(()=>repo.create(input,1),/limit/);
+ await assert.rejects(()=>repo.edit('other',String(a.id),2000,'above'),/Only your/);await repo.edit('member',String(a.id),2000,'above');
+ const updated=(await pool.query('SELECT * FROM futbot_alerts WHERE id=$1',[a.id])).rows[0];assert.equal(Number(updated.target),2000);assert.equal(updated.direction,'above');
+ await pool.query("UPDATE futbot_alerts SET state='queued' WHERE id=$1",[a.id]);await assert.rejects(()=>repo.edit('member',String(a.id),2500,'above'),/queued/);
+ await watch(pool,'member','1',27,'ps5',1);await watch(pool,'member','1',27,'ps5',1);await assert.rejects(()=>watch(pool,'member','2',27,'ps5',1),/full/);
+});
+test('scheduler posts once, skips unchanged/stale data and isolates tenant lists',async t=>{
+ const {db,pool}=await testDatabase();t.after(()=>db.close());
+ await pool.query("INSERT INTO futbot_subscriptions(scope,scope_id,owner_id,plan,status,paid_until) VALUES('guild',$1,'owner','tools','active',now()+interval '1 day')",[g]);
+ const list=(await pool.query("INSERT INTO futbot_shared_lists(guild_id,name,created_by) VALUES($1,'Tonight','owner') RETURNING id",[g])).rows[0].id;
+ await pool.query("INSERT INTO futbot_shared_cards(list_id,card_id,game_year,platform) VALUES($1,1,27,'ps5')",[list]);
+ const feed=(await pool.query("INSERT INTO futbot_feeds(guild_id,kind,name,channel_id,list_id,enabled,next_run_at) VALUES($1,'watchlist','Tonight',$1,$2,true,now()-interval '1 second') RETURNING id",[g,list])).rows[0].id;
+ let value=1000,stale=false,sends=0;const market:any={platform:'ps5',maxAge:15,prices:{year:27,card:async()=>({id:'1',name:'Exact item',rating:85,position:'CM',rarity:'Gold',image:null}),latest:async()=>({value,capturedAt:new Date(Date.now()-(stale?3600000:0))}),baseline:async()=>null}};
+ const original=globalThis.fetch;globalThis.fetch=(async()=>{sends++;return new Response(JSON.stringify({id:'message'}),{status:200});}) as any;t.after(()=>{globalThis.fetch=original;});
+ await feedTick(pool,market,'token',async()=>true);await feedTick(pool,market,'token',async()=>true);assert.equal(sends,1);
+ assert.equal((await pool.query('SELECT state FROM futbot_feed_runs')).rows[0].state,'posted');
+ await pool.query("UPDATE futbot_feeds SET next_run_at=now()-interval '2 seconds' WHERE id=$1",[feed]);await feedTick(pool,market,'token',async()=>true);assert.equal(sends,1);assert.equal((await pool.query('SELECT state FROM futbot_feed_runs ORDER BY id DESC LIMIT 1')).rows[0].state,'skipped');
+ stale=true;value=2000;await pool.query("UPDATE futbot_feeds SET next_run_at=now()-interval '3 seconds' WHERE id=$1",[feed]);await feedTick(pool,market,'token',async()=>true);assert.equal(sends,1);
+ assert.equal((await pool.query('SELECT detail FROM futbot_feed_runs ORDER BY id DESC LIMIT 1')).rows[0].detail,'Waiting for a complete, fresh set of prices.');
+});
+test('feed messages restrict mentions and hash prices independently of capture time',()=>{
+ const c:any={id:'1',name:'Exact',rating:85,position:'CM',value:1000,change:5,capturedAt:new Date(),image:'https://example.com/card.png'};
+ const payload=feedPayload({kind:'watchlist',name:'Tonight',role_id:g,last_prices:{'1':900}},[c],{name:'Club',accent:'#3458ff',footer:'Club feed',settings:{}},'ps5',27);
+ assert.deepEqual(payload.allowed_mentions,{parse:[],roles:[g]});assert.match(payload.embeds[0].fields![0].value,/100 since last post/);assert.equal(payload.components[0].components[0].custom_id,'feedcard');assert.equal(fingerprint([c]),fingerprint([{...c,capturedAt:new Date(0)}]));
+});
