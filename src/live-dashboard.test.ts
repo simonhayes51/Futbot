@@ -10,3 +10,9 @@ test('live dashboard loads real API responses and saves private alerts and serve
  const select=w.document.querySelector('#guild');select.value='123456789012345678';select.dispatchEvent(new w.Event('change'));await tick();w.document.querySelector('nav [data-page=branding]').click();await tick();const b=w.document.querySelector('#brand-form');b.elements.name.value='New club';b.dispatchEvent(new w.Event('input',{bubbles:true}));assert.equal(w.document.querySelector('#preview-name').textContent,'New club');b.dispatchEvent(new w.Event('submit',{bubbles:true,cancelable:true}));await tick();assert(calls.some(c=>c.url.endsWith('/settings')&&c.opts.method==='PUT'));
  dom.window.close();
 });
+
+test('market failure leaves the calculator and authorized server selector usable',async()=>{
+ const dom=new JSDOM(await readFile(new URL('../dist/app/index.html',import.meta.url),'utf8'),{url:'https://futbot.test/app/',runScripts:'outside-only'});const w=dom.window as any;
+ w.fetch=async(url:string)=>{const p=url.replace('/api/','');const data:any={me:{user:{id:'u',name:'Simon'},csrf:'t',year:27,platform:'ps5',alertLimit:3},market:{error:'Query timed out (code 57014)'},alerts:{alerts:[]},watchlist:{cards:[]},investments:{holdings:[]},guilds:{guilds:[{id:'123456789012345678',name:'My club'}]}};return {ok:p!=='market',status:p==='market'?503:200,json:async()=>data[p]};};
+ w.eval(await readFile(new URL('../dist/app/live.js',import.meta.url),'utf8'));await tick();assert.match(w.document.querySelector('#main').textContent,/57014/);assert.equal(w.document.querySelector('#guild').options.length,2);w.document.querySelector('nav [data-page=calculator]').click();await tick();assert(w.document.querySelector('#tax-form'));assert.match(w.document.querySelector('#tax-result').textContent,/14,000/);dom.window.close();
+});

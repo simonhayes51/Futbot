@@ -11,20 +11,26 @@ export class MarketService{
  async snapshot(){if(this.cached&&Date.now()-this.cached.at<300000)return this.cached.cards.filter(c=>isFresh(c.capturedAt,this.maxAge));if(this.pending)return this.pending;
  this.pending=this.load().then(cards=>{this.cached={at:Date.now(),cards};return cards;}).finally(()=>{this.pending=undefined;});return this.pending;}
  private async load():Promise<MarketCard[]>{
- const {rows}=await this.prices.pool.query(`WITH latest AS (
- SELECT DISTINCT ON(source_card_id) source_card_id,lowest_bin,captured_at
- FROM public.futgg_bin_history WHERE game_year=$1 AND platform=$2 AND lowest_bin>0
- AND captured_at>=now()-($3::int * interval '1 minute') AND captured_at<=now()+interval '1 minute'
- ORDER BY source_card_id,captured_at DESC,id DESC),baseline AS (
- SELECT DISTINCT ON(source_card_id) source_card_id,lowest_bin,captured_at
- FROM public.futgg_bin_history WHERE game_year=$1 AND platform=$2 AND lowest_bin>0
- AND captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours'
- ORDER BY source_card_id,captured_at DESC,id DESC)
- SELECT p.source_card_id::text AS id,COALESCE(p.display_name,p.name,p.full_name,'Unknown card') AS name,
- p.rating,p.primary_position AS position,p.rarity,p.club,COALESCE(p.card_image_stored_url,p.card_image_url,p.player_image_url) AS image,
- l.lowest_bin::int AS value,l.captured_at AS "capturedAt",b.lowest_bin::int AS previous,b.captured_at AS "previousAt"
- FROM latest l JOIN public.futgg_players p ON p.source_card_id=l.source_card_id AND p.game_year=$1
- LEFT JOIN baseline b ON b.source_card_id=l.source_card_id WHERE p.is_active=true`,[this.prices.year,this.platform,this.maxAge]);
+ const {rows}=await this.prices.pool.query(`SELECT p.source_card_id::text AS id,
+ COALESCE(p.display_name,p.name,p.full_name,'Unknown card') AS name,
+ p.rating,p.primary_position AS position,p.rarity,p.club,
+ COALESCE(p.card_image_stored_url,p.card_image_url,p.player_image_url) AS image,
+ l.lowest_bin::int AS value,l.captured_at AS "capturedAt",
+ b.lowest_bin::int AS previous,b.captured_at AS "previousAt"
+ FROM public.futgg_players p
+ JOIN LATERAL (
+ SELECT h.lowest_bin,h.captured_at FROM public.futgg_bin_history h
+ WHERE h.source_card_id=p.source_card_id AND h.game_year=$1 AND h.platform=$2 AND h.lowest_bin>0
+ AND h.captured_at>=now()-($3::int * interval '1 minute') AND h.captured_at<=now()+interval '1 minute'
+ ORDER BY h.captured_at DESC,h.id DESC LIMIT 1
+ ) l ON true
+ LEFT JOIN LATERAL (
+ SELECT h.lowest_bin,h.captured_at FROM public.futgg_bin_history h
+ WHERE h.source_card_id=p.source_card_id AND h.game_year=$1 AND h.platform=$2 AND h.lowest_bin>0
+ AND h.captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours'
+ ORDER BY h.captured_at DESC,h.id DESC LIMIT 1
+ ) b ON true
+ WHERE p.game_year=$1 AND p.is_active=true`,[this.prices.year,this.platform,this.maxAge]);
  return rows.map(r=>({...r,value:Number(r.value),previous:r.previous===null?null:Number(r.previous),change:r.previous?((Number(r.value)-Number(r.previous))/Number(r.previous))*100:null}));
  }
 }

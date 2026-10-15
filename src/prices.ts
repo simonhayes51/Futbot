@@ -33,6 +33,9 @@ export class PriceRepository {
       ORDER BY captured_at DESC,id DESC LIMIT 1`, [cardId,platform,this.year]);
     return rows[0] || null;
   }
+  async baseline(cardId:string,platform:string):Promise<{value:number;capturedAt:Date}|null>{
+    const {rows}=await this.pool.query(`SELECT lowest_bin AS value,captured_at AS "capturedAt" FROM public.futgg_bin_history WHERE source_card_id=$1 AND platform=$2 AND game_year=$3 AND lowest_bin>0 AND captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours' ORDER BY captured_at DESC,id DESC LIMIT 1`,[cardId,platform,this.year]);return rows[0]??null;
+  }
   async history(cardId: string, platform: string, hours = 24): Promise<{ at: Date; value: number }[]> {
     const { rows } = await this.pool.query(`SELECT date_trunc('hour',captured_at) AS at,
       percentile_cont(0.5) WITHIN GROUP (ORDER BY lowest_bin)::int AS value
