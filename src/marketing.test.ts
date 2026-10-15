@@ -33,8 +33,8 @@ test('pricing calculates annual totals and sponsored seat tiers consistently',as
 });
 test('command guide filters implemented commands, searches and copies examples',async()=>{
  const {dom,w,$}=await load('commands/');
- assert.equal(w.document.querySelectorAll('.command-card').length,20);
- $('[data-filter="first"]').click();assert.equal(w.document.querySelectorAll('.command-card').length,5);
+ assert.equal(w.document.querySelectorAll('.command-card').length,21);
+ $('[data-filter="first"]').click();assert.equal(w.document.querySelectorAll('.command-card').length,6);
  $('#command-search').value='id:12';$('#command-search').dispatchEvent(new w.Event('input',{bubbles:true}));
  assert.equal(w.document.querySelectorAll('.command-card').length,1);
  let copied='';Object.defineProperty(w.navigator,'clipboard',{value:{writeText:async(s:string)=>{copied=s;}}});

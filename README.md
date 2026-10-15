@@ -7,7 +7,7 @@ A new standalone Ultimate Team Discord bot and private admin dashboard preview. 
 - Responsive dashboard with eight pages: overview, card explorer, alerts, watchlist, market movers, feeds, appearance, and data connections.
 - Local demo interactions: player filtering, selectable cards/chart ranges, hover chart values, watchlist, alert creation/pause/delete, feed configuration/pause/delete, appearance editor with Discord preview.
 - Two actual card artworks (Lavia/Witzig) downloaded from the supplied catalogue. Other demo cards use clearly illustrative placeholders. All displayed prices, movement, stats for illustrative cards and history series are demonstration data.
-- Separate TypeScript Discord service: `/price`, `/alert`, `/myalerts`, `/removealert`, `/tax`; player autocomplete, card thumbnails, generated PNG charts, private target-price notifications.
+- Separate TypeScript Discord service: `/price`, `/alert`, `/myalerts`, `/removealert`, `/tax`, `/testdm`; player autocomplete, card thumbnails, generated PNG charts, private target-price notifications.
 - Database reader using SELECT-only PostgreSQL connection settings, restricted game year and a configured platform. Price lookups use the supplied source-card/time index.
 - Application schema and alert worker with shared latest-price lookups per watched card, stale-data rejection, an outbox, delivery retries and a single-worker advisory lock. Deterministic Discord nonces reduce duplicate notifications after restarts; exactly-once delivery across database/Discord is not guaranteed.
 
@@ -61,8 +61,14 @@ The root website now includes a homepage, `/pricing/`, `/commands/` and `/server
 
 The website clearly identifies the development stage and proposed launch prices. No payments, installation, signup or production account connection is enabled. Server Complete pricing is proposed at £19.99/25 seats, £49.99/100 seats and £99.99/250 seats monthly. Annual pricing is ten monthly payments upfront (two months free). These are planning prices, not provisioned Stripe products. Free defaults are aligned to three alerts in the bot configuration.
 
-The command guide documents the five implemented service commands and separately labels fifteen proposed commands. Pricing entitlements, server sponsorship, admin OAuth, social feed delivery, broader analytics and the member dashboard remain future work.
+The command guide documents the six implemented service commands and separately labels fifteen proposed commands. Pricing entitlements, server sponsorship, admin OAuth, social feed delivery, broader analytics and the member dashboard remain future work.
 
 ## Visual direction: FutBot Field Guide / Issue 001
 
 The website takes its visual language from late-1990s football magazines and console demo-disc packaging: silver paper, cobalt blue, fluorescent orange, condensed italic sports headlines, numbered editorial rows and a player-card collage. The pricing page uses season-ticket styling; commands read as a game manual. The dashboard pairs dark console navigation with a silver workspace. All existing demo interactions and proposed pricing remain in place.
+
+## Deployment and admin access
+
+The website dashboard is `/app/` on the domain serving `dist`. This is a clearly labelled browser-local demo, not an authenticated live admin backend. Deploying the Discord worker alone does not serve a website or expose an admin URL. Live OAuth, role checks and the API connecting dashboard settings to the bot remain to be implemented.
+
+Redeploy the bot with the existing `npm run migrate && npm start` command after updates. Charts bundle DejaVu Sans with its licence; no font installation is needed on Railway or Coolify. Run `/testdm` to verify real DM delivery. An actual threshold alert still requires a fresh observed price meeting its target.
