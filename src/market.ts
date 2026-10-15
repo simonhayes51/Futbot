@@ -4,7 +4,8 @@ export type MarketCard=Card&{value:number;capturedAt:Date;previous:number|null;p
 export function ratingValue(v:unknown,fallback=83){const n=Number(v??fallback);if(!Number.isInteger(n)||n<75||n>99)throw new Error('Rating must be a whole number from 75 to 99.');return n;}
 export function targetValue(v:unknown){const n=Number(v);if(!Number.isInteger(n)||n<1||n>15000000)throw new Error('Price must be a whole coin amount from 1 to 15,000,000.');return n;}
 export function fodderRows(cards:MarketCard[],rating?:number){const ratings=rating?[rating]:[83,84,85,86,87,88,89,90,91];return ratings.map(r=>({rating:r,cards:cards.filter(c=>c.rating===r).sort((a,b)=>a.value-b.value).slice(0,3)}));}
-export function movers(cards:MarketCard[],direction='risers'){return cards.filter(c=>c.change!==null&&(direction==='fallers'?c.change<0:c.change>0)).sort((a,b)=>direction==='fallers'?a.change!-b.change!:b.change!-a.change!).slice(0,10);}
+export function completeCard(c:MarketCard){return !!c.name?.trim()&&!/^unknown(?: card| player)?$/i.test(c.name.trim())&&Number.isInteger(c.rating)&&c.rating!>=1&&c.rating!<=99&&!!c.position&&Number.isFinite(c.value)&&c.value>0;}
+export function movers(cards:MarketCard[],direction='risers'){return cards.filter(c=>completeCard(c)&&(c.rating??0)>=80&&c.value>=1000&&c.change!==null&&(direction==='fallers'?c.change<0:c.change>0)).sort((a,b)=>direction==='fallers'?a.change!-b.change!:b.change!-a.change!).slice(0,10);}
 export class MarketService{
  private cached:{at:number;cards:MarketCard[]}|undefined;private pending:Promise<MarketCard[]>|undefined;
  constructor(public prices:PriceRepository,public platform:string,public maxAge=15){}
@@ -25,12 +26,13 @@ export class MarketService{
  ORDER BY h.captured_at DESC,h.id DESC LIMIT 1
  ) l ON true
  LEFT JOIN LATERAL (
- SELECT h.lowest_bin,h.captured_at FROM public.futgg_bin_history h
+ SELECT percentile_cont(0.5) WITHIN GROUP(ORDER BY h.lowest_bin)::int AS lowest_bin,max(h.captured_at) AS captured_at
+ FROM public.futgg_bin_history h
  WHERE h.source_card_id=p.source_card_id AND h.game_year=$1 AND h.platform=$2 AND h.lowest_bin>0
  AND h.captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours'
- ORDER BY h.captured_at DESC,h.id DESC LIMIT 1
+ HAVING count(*)>=3
  ) b ON true
  WHERE p.game_year=$1 AND p.is_active=true`,[this.prices.year,this.platform,this.maxAge]);
- return rows.map(r=>({...r,value:Number(r.value),previous:r.previous===null?null:Number(r.previous),change:r.previous?((Number(r.value)-Number(r.previous))/Number(r.previous))*100:null}));
+ return rows.map(r=>({...r,value:Number(r.value),previous:r.previous===null?null:Number(r.previous),change:r.previous?((Number(r.value)-Number(r.previous))/Number(r.previous))*100:null})).filter(completeCard);
  }
 }

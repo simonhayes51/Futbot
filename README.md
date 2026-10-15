@@ -8,7 +8,7 @@ Ultimate Team Discord tools, an editorial marketing website and a live Discord-a
 
 - Player artwork, current BIN, freshness, 24-hour/7-day hourly-median graphs, period median lows/highs and after-tax value. Buy/sell alert, watchlist and chart buttons.
 - Fodder boards: cheapest three fresh-priced cards at each rating (83–91 by default), PNG rating ladder, optional exact rating.
-- Movers: top ten risers/fallers against the last observation 24–25 hours ago. Missing baselines are excluded.
+- Movers: top ten risers/fallers against the median of at least three observations 24–25 hours ago. Missing baselines are excluded.
 - Budget finder and two-card price comparison.
 - Cross-device personal watchlists, private target alerts with DM outbox/retries, pause/resume/cancel, DM delivery test.
 - Live dashboard at `/app/`: Discord OAuth, private member data, card explorer, downloadable charts, fodder cards/board download, movers, watchlists, alerts, tax calculator and manual investment records with fresh-price after-tax valuations.
@@ -72,11 +72,11 @@ Price source: `public.futgg_players` and `public.futgg_bin_history`. Preserve fi
 
 Market snapshots are shared and cached for five minutes per process, coalescing concurrent reads. Expired observations are withheld even within the cache. They require fresh observations (15 minutes by default). Price source queries time out after eight seconds. If market queries time out on a large database, check source indexes and query plans with the database owner: this app intentionally does not add indexes to your source database.
 
-Price graphs use hourly medians, not every raw observation. Movement compares latest BIN with a baseline observation, not trading advice. Fodder means cheapest available catalogue items at a rating: no guarantee of SBC eligibility, tradeability or an obtainable listing. Investment records are manual and unrealised; they do not sync with an EA club. Stale/unavailable holdings are excluded from profit totals.
+Price graphs use hourly medians, not every raw observation. Movement compares latest BIN with a baseline median, not trading advice. Fodder means cheapest available catalogue items at a rating: no guarantee of SBC eligibility, tradeability or an obtainable listing. Investment records are manual and unrealised; they do not sync with an EA club. Stale/unavailable holdings are excluded from profit totals.
 
 ## Access controls
 
-OAuth state validation, encrypted server-side access tokens, random hashed session cookies (HttpOnly/SameSite/Secure over HTTPS), expiry and CSRF-protected writes. Server management checks Discord membership and Manage Server/Administrator permission at request time, plus bot installation. Channel choices resolve bot channel permission overwrites. Server managers cannot inspect other users' targets, watchlists or portfolios. Publishing is a deliberate button action with a one-minute cooldown and an audit record. No automatic external feed posting is enabled.
+OAuth state validation, encrypted server-side access tokens, random hashed session cookies (HttpOnly/SameSite/Secure over HTTPS), expiry and CSRF-protected writes. Server management checks Discord membership and Manage Server/Administrator permission at request time for writes (brief read caching), plus bot installation. Channel choices resolve bot channel permission overwrites. Server managers cannot inspect other users' targets, watchlists or portfolios. Publishing is a deliberate button action with a one-minute cooldown and an audit record. No automatic external feed posting is enabled.
 
 ## Development
 
@@ -91,3 +91,5 @@ Payments, sponsored Pro seats, entitlement enforcement, X/TweetShift-style inges
 ## Runtime diagnostics
 
 The current startup log reports 17 commands. A log reporting 6 commands is an older deployment. Redeploy the latest `main` revision. Database pools have finite connection/statement timeouts and idle error listeners. Alert failures report a redacted error code and actionable hint (including disk-full, connection resets, restarts and query timeouts), without printing connection strings. Receiving SIGTERM means the host asked the process to stop; check deployment/host events to establish why. Fontconfig discovery is bundled with the renderer.
+
+Discord GET requests are coalesced and cached for ten seconds to avoid duplicate permission reads. Writes explicitly bypass cached permission/channel checks. Rate-limit responses respect Retry-After before one bounded retry; longer limits are shown with a wait time. Server discovery intersects the user guild list with the bot guild list rather than probing every user server. Market lists exclude incomplete/unknown metadata; movers show 80+ rated items priced at least 1,000 coins, using a median baseline with at least three observations. Large percentage changes are flagged for verification, not silently removed.
