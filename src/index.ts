@@ -28,10 +28,17 @@ const alerts=new AlertRepository(process.env.APP_DATABASE_URL!);
 const client=new Client({intents:[GatewayIntentBits.Guilds]});
 const context=new AsyncLocalStorage<GuildSettings>();
 const market=new MarketService(prices,platform,maxAge);
-const brand=()=>{const b=context.getStore()??defaultBrand;return new EmbedBuilder().setColor(b.accent as `#${string}`).setAuthor({name:b.name}).setFooter({text:`${b.footer} • FC${year} • ${platform.toUpperCase()}`});};
+const brand=(pricePlatform=platform)=>{const b=context.getStore()??defaultBrand;return new EmbedBuilder().setColor(b.accent as `#${string}`).setAuthor({name:b.name}).setFooter({text:`${b.footer} • FC${year} • ${pricePlatform.toUpperCase()}`});};
 const playerOption=(o:any)=>o.setName('player').setDescription('Search a player and choose the exact card').setRequired(true).setAutocomplete(true);
 const commands=[...extraCommands,
-  new SlashCommandBuilder().setName('price').setDescription('Check a card price with artwork and market history').addStringOption(playerOption),
+  new SlashCommandBuilder().setName('price').setDescription('Check a card price with artwork and market history').addStringOption(playerOption).addStringOption(o=>o.setName('platform').setDescription('Market for this price lookup').addChoices({name:'PS5 / Xbox · Console',value:'ps5'},{name:'PC',value:'pc'})),
+  new SlashCommandBuilder().setName('flip').setDescription('Post a player flip with live market context and member actions')
+    .addStringOption(playerOption)
+    .addStringOption(o=>o.setName('platform').setDescription('Market for this flip').setRequired(true).addChoices({name:'PS5 / Xbox · Console',value:'ps5'},{name:'PC',value:'pc'}))
+    .addStringOption(o=>o.setName('risk').setDescription('Your own risk rating').addChoices({name:'Low risk',value:'low'},{name:'Medium risk',value:'medium'},{name:'High risk',value:'high'}))
+    .addIntegerOption(o=>o.setName('entry').setDescription('Your suggested buy price or max entry').setMinValue(1).setMaxValue(15000000))
+    .addIntegerOption(o=>o.setName('target').setDescription('Your suggested sell target').setMinValue(1).setMaxValue(15000000))
+    .addStringOption(o=>o.setName('note').setDescription('Why you like the flip (optional)').setMaxLength(240)),
   new SlashCommandBuilder().setName('alert').setDescription('Get a private DM when a card reaches your price').addStringOption(playerOption)
     .addStringOption(o=>o.setName('direction').setDescription('Target direction').setRequired(true).addChoices({name:'At or below',value:'below'},{name:'At or above',value:'above'}))
     .addIntegerOption(o=>o.setName('target').setDescription('Target price in coins').setRequired(true).setMinValue(1).setMaxValue(15000000)),
@@ -51,9 +58,9 @@ async function resolveCard(value:string):Promise<Card>{
   if(matches.length===1)return matches[0];
   throw new Error(matches.length?'Several cards match. Type the name and choose an exact version from autocomplete.':'No matching FC card found.');
 }
-async function showPrice(card:Card,hours=24){
-  const [price,history]=await Promise.all([prices.latest(card.id,platform),prices.history(card.id,platform,hours)]);
-  const embed=brand().setTitle(`🪙 ${card.name} · ${card.rating??'—'} ${card.position??''}`).setDescription(`${card.rarity||'Player item'}${card.club?' · '+card.club:''}`);
+async function showPrice(card:Card,hours=24,pricePlatform=platform){
+  const [price,history]=await Promise.all([prices.latest(card.id,pricePlatform),prices.history(card.id,pricePlatform,hours)]);
+  const embed=brand(pricePlatform).setTitle(`🪙 ${card.name} · ${card.rating??'—'} ${card.position??''}`).setDescription(`${card.rarity||'Player item'}${card.club?' · '+card.club:''}`);
   if(card.image&&card.image.startsWith('https://'))embed.setThumbnail(card.image);
   const files:AttachmentBuilder[]=[];
   if(!price){embed.addFields({name:'Market price',value:'No price available for this market.'});return {embeds:[embed],files,components:[]};}
@@ -65,18 +72,42 @@ async function showPrice(card:Card,hours=24){
     const png=await marketChart(`${card.name} / ${period} history`,history);if(png){files.push(new AttachmentBuilder(png,{name:'market.png'}));embed.setImage('attachment://market.png');}
   }
   if(history.length){const values=history.map(p=>p.value);embed.addFields({name:`${period.toUpperCase()} LOW`,value:coins(Math.min(...values))+' coins',inline:true},{name:`${period.toUpperCase()} HIGH`,value:coins(Math.max(...values))+' coins',inline:true},{name:'AFTER 5% TAX',value:coins(Math.floor(price.value*.95))+' coins',inline:true});}
-  embed.setFooter({text:`${context.getStore()?.footer??defaultBrand.footer} • FC${year} • ${platform.toUpperCase()} • Observed BIN`}).setTimestamp(price.capturedAt);
-  const row=new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`newalert:${card.id}`).setLabel('Buy alert').setEmoji('🔔').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`history:${card.id}:${hours===24?168:24}`).setLabel(hours===24?'7-day chart':'24-hour chart').setEmoji('📊').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`abovealert:${card.id}`).setLabel('Sell alert').setEmoji('📈').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`watch:${card.id}`).setLabel('Watch').setEmoji('⭐').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`history:${card.id}:${hours}`).setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary));
+  embed.setFooter({text:`${context.getStore()?.footer??defaultBrand.footer} • FC${year} • ${pricePlatform.toUpperCase()} • Observed BIN`}).setTimestamp(price.capturedAt);
+  const row=new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`newalert:${card.id}:${pricePlatform}`).setLabel('Buy alert').setEmoji('🔔').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`history:${card.id}:${hours===24?168:24}:${pricePlatform}`).setLabel(hours===24?'7-day chart':'24-hour chart').setEmoji('📊').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`abovealert:${card.id}:${pricePlatform}`).setLabel('Sell alert').setEmoji('📈').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`watch:${card.id}:${pricePlatform}`).setLabel('Watch').setEmoji('⭐').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`history:${card.id}:${hours}:${pricePlatform}`).setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary));
   return {embeds:[embed],files,components:[row]};
 }
-async function createAlert(i:any,value:string,direction:Direction,target:number){
+async function createAlert(i:any,value:string,direction:Direction,target:number,pricePlatform=platform){
   if(!Number.isInteger(target)||target<1||target>15000000)throw new Error('Enter a whole coin amount between 1 and 15,000,000.');
   const card=await resolveCard(value);
-  const a=await alerts.create({userId:i.user.id,guildId:i.guildId,cardId:card.id,cardName:card.name,year,platform,direction,target},(await benefits(alerts.pool,i.user.id)).alerts);
-  const embed=brand().setTitle('PRICE ALERT / WATCHING').setDescription(`**${card.name}** · ${platform.toUpperCase()}\nNotify at or ${direction} **${coins(target)} coins**.`).addFields({name:'Alert ID',value:String(a.id),inline:true},{name:'Manage',value:'Use /myalerts or /removealert. Enable DMs to receive notifications.'});
-  const p=await prices.latest(card.id,platform).catch(()=>null);embed.addFields({name:'CURRENT BIN',value:alertPriceText({currentPrice:p?.value??null,priceCapturedAt:p?.capturedAt??null,priceFresh:!!p&&isFresh(p.capturedAt,maxAge)}),inline:true},{name:'CARD VERSION',value:`${card.rating??'—'} ${card.position??''} · ${card.rarity??'Player item'}`,inline:true});
+  const a=await alerts.create({userId:i.user.id,guildId:i.guildId,cardId:card.id,cardName:card.name,year,platform:pricePlatform,direction,target},(await benefits(alerts.pool,i.user.id)).alerts);
+  const embed=brand(pricePlatform).setTitle('PRICE ALERT / WATCHING').setDescription(`**${card.name}** · ${pricePlatform.toUpperCase()}\nNotify at or ${direction} **${coins(target)} coins**.`).addFields({name:'Alert ID',value:String(a.id),inline:true},{name:'Manage',value:'Use /myalerts or /removealert. Enable DMs to receive notifications.'});
+  const p=await prices.latest(card.id,pricePlatform).catch(()=>null);embed.addFields({name:'CURRENT BIN',value:alertPriceText({currentPrice:p?.value??null,priceCapturedAt:p?.capturedAt??null,priceFresh:!!p&&isFresh(p.capturedAt,maxAge)}),inline:true},{name:'CARD VERSION',value:`${card.rating??'—'} ${card.position??''} · ${card.rarity??'Player item'}`,inline:true});
   if(card.image?.startsWith('https://'))embed.setThumbnail(card.image);
   return embed;
+}
+async function createFlipPost(i:any,card:Card,pricePlatform:string){
+  if(!i.guildId)throw new Error('Post flip ideas inside a Discord server.');
+  if(!['ps5','pc'].includes(pricePlatform))throw new Error('Choose Console or PC.');
+  const entry=i.options.getInteger('entry'),target=i.options.getInteger('target');
+  if(entry===null&&target===null)throw new Error('Add an entry price or a sell target so members know what the call is.');
+  const live=await prices.latest(card.id,pricePlatform);
+  if(!live||!isFresh(live.capturedAt,maxAge))throw new Error(`There isn’t a fresh ${pricePlatform.toUpperCase()} price for ${card.name} yet, so I can’t post it as a live market call.`);
+  const result=await showPrice(card,24,pricePlatform);
+  const embed=result.embeds[0] as EmbedBuilder;
+  const member=i.member as any;
+  const posterName=member?.nick||i.user.globalName||i.user.username;
+  embed.setAuthor({name:`${posterName} posted a flip`,iconURL:i.user.displayAvatarURL()});
+  embed.setTitle(`📊 FLIP IDEA · ${card.name}`);
+  embed.setDescription(`${(i.options.getString('risk')||'unrated').toUpperCase()} RISK · TRADER RATED · ${pricePlatform.toUpperCase()}\n${i.options.getString('note')||'No extra notes.'}`);
+  embed.addFields(
+    {name:'🟢 SUGGESTED ENTRY',value:entry===null?'Not set':`${coins(entry)} coins`,inline:true},
+    {name:'🎯 SUGGESTED TARGET',value:target===null?'Not set':`${coins(target)} coins`,inline:true},
+  );
+  if(entry!==null&&target!==null){
+    const profit=tradeProfit(entry,target);
+    embed.addFields({name:'EST. PROFIT AFTER TAX',value:`${profit.profit>=0?'+':''}${coins(profit.profit)} / card`,inline:true});
+  }
+  return {...result,allowedMentions:{parse:[]}};
 }
 async function showAlerts(user:string,page=0){
  const rows=await alertPrices(await alerts.list(user),prices,maxAge),pages=Math.max(1,Math.ceil(rows.length/3));page=Math.max(0,Math.min(page,pages-1));
@@ -97,22 +128,24 @@ async function handle(i:Interaction){
     if(i.customId.startsWith('editalert:')){const id=i.customId.split(':')[1],a=(await alerts.list(i.user.id)).find(a=>a.id===id);if(!a||!['active','paused'].includes(a.state))throw new Error('This alert can no longer be edited.');const modal=new ModalBuilder().setCustomId(`edittarget:${id}`).setTitle('Edit your price target');modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId('target').setLabel('New target price in coins').setValue(String(a.target)).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8)));await i.showModal(modal);return;}
     if(i.customId.startsWith('removealert:')||i.customId.startsWith('alertstate:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [action,id,state]=i.customId.split(':');if(action==='removealert'){if(!await alerts.remove(i.user.id,id))throw new Error('This alert cannot be cancelled.');}else{if(!['active','paused'].includes(state))return;const r=await alerts.pool.query('UPDATE futbot_alerts SET state=$1 WHERE id=$2 AND user_id=$3 AND state=$4 RETURNING id',[state,id,i.user.id,state==='active'?'paused':'active']);if(!r.rowCount)throw new Error('This alert has changed. Run /myalerts again.');}await i.editReply(await showAlerts(i.user.id));return;}
 
-    const [action,id,hours]=i.customId.split(':');if(!/^\d+$/.test(id||''))return;
-    if(action==='watch'){await i.deferReply({flags:MessageFlags.Ephemeral});await resolveCard(id);await watch(alerts.pool,i.user.id,id,year,platform,(await benefits(alerts.pool,i.user.id)).watch);await i.editReply('⭐ Card added to your private watchlist. Use /watchlist or /dashboard.');return;}
+    const [action,id,arg,platformArg]=i.customId.split(':');if(!/^\d+$/.test(id||''))return;
+    const actionPlatform=(platformArg==='pc'||platformArg==='ps5')?platformArg:(arg==='pc'||arg==='ps5')?arg:platform;
+    if(action==='watch'){await i.deferReply({flags:MessageFlags.Ephemeral});await resolveCard(id);await watch(alerts.pool,i.user.id,id,year,actionPlatform,(await benefits(alerts.pool,i.user.id)).watch);await i.editReply(`⭐ ${actionPlatform.toUpperCase()} card added to your private watchlist. Use /watchlist or /dashboard.`);return;}
     if(action==='newalert'||action==='abovealert'){
-      const modal=new ModalBuilder().setCustomId(`alertmodal:${id}:${action==='abovealert'?'above':'below'}`).setTitle('Set your price target');
+      const modal=new ModalBuilder().setCustomId(`alertmodal:${id}:${action==='abovealert'?'above':'below'}:${actionPlatform}`).setTitle('Set your price target');
       const target=new TextInputBuilder().setCustomId('target').setLabel(action==='abovealert'?'Notify at or above this price (coins)':'Notify at or below this price (coins)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8);
       modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(target));await i.showModal(modal);return;
     }
-    if(action==='history'){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showPrice(await resolveCard(id),hours==='168'?168:24));return;}
+    if(action==='history'){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showPrice(await resolveCard(id),arg==='168'?168:24,actionPlatform));return;}
   }
   if(i.isModalSubmit()&&i.customId.startsWith('edittarget:')){await i.deferReply({flags:MessageFlags.Ephemeral});const id=i.customId.split(':')[1],a=(await alerts.list(i.user.id)).find(a=>a.id===id);if(!a)throw new Error('Alert not found.');await alerts.edit(i.user.id,id,Number(i.fields.getTextInputValue('target')),a.direction);await i.editReply(await showAlerts(i.user.id));return;}
-  if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply({embeds:[await createAlert(i,i.customId.split(':')[1],i.customId.split(':')[2]==='above'?'above':'below',Number(i.fields.getTextInputValue('target')))]});return;}
+  if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,id,direction,pricePlatform]=i.customId.split(':');await i.editReply({embeds:[await createAlert(i,id,direction==='above'?'above':'below',Number(i.fields.getTextInputValue('target')),pricePlatform)]});return;}
   if(!i.isChatInputCommand())return;
-  await i.deferReply({flags:!['price','fodder','movers','budget','compare'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
+  await i.deferReply({flags:!['price','flip','fodder','movers','budget','compare'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
   if(extraCommands.some(c=>c.name===i.commandName)){await handleTool(i,market,alerts,brand,resolveCard,await benefits(alerts.pool,i.user.id));return;}
   if(i.commandName==='testdm'){try{await i.user.send({embeds:[brand().setTitle('NOTIFICATIONS / CONNECTED').setDescription('FutBot can reach your DMs. Price alerts will arrive here when a fresh observed price meets your target.')]});await i.editReply('Test notification sent. Check your DMs.');}catch{await i.editReply('I could not send you a DM. Enable direct messages from this server, check that FutBot is not blocked, then run /testdm again.');}}
-  if(i.commandName==='price')await i.editReply(await showPrice(await resolveCard(i.options.getString('player',true))));
+  if(i.commandName==='price')await i.editReply(await showPrice(await resolveCard(i.options.getString('player',true)),24,i.options.getString('platform')??platform));
+  if(i.commandName==='flip')await i.editReply(await createFlipPost(i,await resolveCard(i.options.getString('player',true)),i.options.getString('platform',true)));
   if(i.commandName==='alert')await i.editReply({embeds:[await createAlert(i,i.options.getString('player',true),i.options.getString('direction',true) as Direction,i.options.getInteger('target',true))]});
   if(i.commandName==='myalerts')await i.editReply(await showAlerts(i.user.id));
   if(i.commandName==='editalert'){const id=i.options.getString('id',true),a=(await alerts.list(i.user.id)).find(a=>a.id===id);if(!a)throw new Error('Alert not found.');await alerts.edit(i.user.id,id,i.options.getInteger('target',true),(i.options.getString('direction')??a.direction) as Direction);await i.editReply(await showAlerts(i.user.id));}
@@ -134,7 +167,7 @@ async function startBot(){
   if(process.env.WEB_ENABLED==='true')web=startWeb(prices,alerts,market);
   console.log(`FutBot ready · FC${year} · ${platform} · ${commands.length} commands`);
   const tick=async()=>{if(busy)return;busy=true;try{await alertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{
-    const user=await client.users.fetch(userId);const card=await prices.card(a.card_id).catch(()=>null);const b=await guildSettings(alerts.pool,(a as any).guild_id);await context.run(b,()=>user.send({nonce:`fb${a.id}`,enforceNonce:true,components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`history:${a.card_id}:24`).setLabel('View price & chart').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`watch:${a.card_id}`).setLabel('Watch card').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`newalert:${a.card_id}`).setLabel('Set another target').setStyle(ButtonStyle.Secondary))],embeds:[brand().setThumbnail(card?.image?.startsWith('https://')?card.image:null).setTitle('🔔 YOUR PRICE TARGET WAS REACHED').setDescription(`**${a.card_name}** · ${card?.rating??'—'} ${card?.position??''} · ${card?.rarity??'Player item'} · ${a.platform.toUpperCase()}`).addFields({name:'Observed price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`})]}));
+    const user=await client.users.fetch(userId);const card=await prices.card(a.card_id).catch(()=>null);const b=await guildSettings(alerts.pool,(a as any).guild_id);await context.run(b,()=>user.send({nonce:`fb${a.id}`,enforceNonce:true,components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`history:${a.card_id}:24:${a.platform}`).setLabel('View price & chart').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`watch:${a.card_id}:${a.platform}`).setLabel('Watch card').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`newalert:${a.card_id}:${a.platform}`).setLabel('Set another target').setStyle(ButtonStyle.Secondary))],embeds:[brand(a.platform).setThumbnail(card?.image?.startsWith('https://')?card.image:null).setTitle('🔔 YOUR PRICE TARGET WAS REACHED').setDescription(`**${a.card_name}** · ${card?.rating??'—'} ${card?.position??''} · ${card?.rarity??'Player item'} · ${a.platform.toUpperCase()}`).addFields({name:'Observed price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`})]}));
   });}catch(error){logFailure('Alert cycle failed',error);}finally{busy=false;}};
   timer=setInterval(()=>void tick(),pollMs);await tick();
   const feedCycle=async()=>{if(feedBusy)return;feedBusy=true;try{await feedTick(alerts.pool,market,process.env.DISCORD_TOKEN!,feedPermission);}catch(e){logFailure('Feed scheduler failed',e);}finally{feedBusy=false;}};

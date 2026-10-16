@@ -4,12 +4,13 @@ Ultimate Team Discord tools, an editorial marketing website and a live Discord-a
 
 ## What is implemented
 
-20 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`.
+21 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`, `/flip`.
 
 - Player artwork, current BIN, freshness, 24-hour/7-day hourly-median graphs, period median lows/highs and after-tax value. Buy/sell alert, watchlist and chart buttons.
 - Fodder boards: cheapest fresh-priced card at each rating (83–91 by default), PNG rating ladder; an optional exact rating shows up to three alternatives.
 - Movers: top ten risers/fallers against the median of at least three observations 24–25 hours ago. Missing baselines are excluded.
 - Budget finder and two-card price comparison.
+- `/flip` lets traders post a selected PS5/Xbox or PC market call with entry/target, trader-rated risk, card artwork, current price and chart; readers can save the same market to a watchlist or create a matching alert.
 - Cross-device personal watchlists, private target alerts with DM outbox/retries, pause/resume/cancel, DM delivery test. Editable active/paused targets, exact-card artwork, saved vs current BIN, distance to target and timestamp; paginated Discord alert controls.
 - Live dashboard at `/app/`: Discord OAuth, private member data, card explorer, downloadable charts, fodder cards/board download, movers, watchlists, alerts, tax calculator and manual investment records with fresh-price after-tax valuations.
 - Server manager workspace: server name/accent/footer, destination channel selection, live preview, manual fodder board publishing and activity log. Automatic fodder/movers/market-brief/shared-watchlist feeds, local posting schedules, scoped role mentions, previews, posting history and pause controls. Shared server lists and sponsored-seat management. Saved settings are used by new bot embeds; this does not rename the bot account or avatar.
@@ -68,7 +69,7 @@ An omitted `DISCORD_GUILD_ID` registers commands globally. If set, the bot must 
 
 Use separate price and application databases. `npm run migrate` applies the idempotent SQL files in `sql/` to the application database only. The price pool sets default transactions read-only. Website sessions, alerts, delivery outbox, watchlists, server settings, activity, investments, feed schedules/runs, shared lists, subscription state and seats live in the application database.
 
-Price source: `public.futgg_players` and `public.futgg_bin_history`. Preserve field names and game/platform filters in `src/prices.ts` and `src/market.ts`. No DDL or writes run on the pricing database. The pricing collector continues independently.
+Price catalogue: `public.futgg_players`. Console observations: `public.futgg_bin_history`; PC observations: `public.futbot_pc_bin_history`. Preserve the game/platform filters in `src/prices.ts` and `src/market.ts`. FutBot stays read-only on the price database. To enable PC prices, apply TradeHQ’s `backend/migrations/101_futbot_pc_bin_history.sql` to the price database and run a second collector with `FUTGG_BULK_PLATFORM=pc`; see `auto_sync/FUTBOT_PC_PRICE_WORKER.md`.
 
 Market snapshots are shared and cached for five minutes per process, coalescing concurrent reads. Expired observations are withheld even within the cache. They require fresh observations (15 minutes by default). Price source queries time out after eight seconds. If market queries time out on a large database, check source indexes and query plans with the database owner: this app intentionally does not add indexes to your source database.
 
@@ -82,7 +83,7 @@ OAuth state validation, encrypted server-side access tokens, random hashed sessi
 
 `npm run check` and `npm test`. `npm run build:site` regenerates marketing pages (requires Python 3 locally); generated files are committed so deployments need not run Python. `dist/app/live.*` is the live dashboard. `dist/demo/` is the isolated prototype. Chart and fodder PNGs bundle DejaVu Sans with its licence, avoiding missing-font failures on cloud hosts.
 
-Automated checks cover market grouping/cache/freshness, chart generation, auth/permissions, CSRF rejection, private API queries, dashboard alert creation/branding, demo flows and marketing interactions. PostgreSQL-engine tests (PGlite) apply all application migrations and exercise real SQL for targets, limits, seats, feed runs, tenant isolation and billing reconciliation. Stripe signature tests use fixture events. Production source-database queries, real Discord OAuth/delivery, Stripe sandbox checkout and hosted browser layouts still require deployment verification with your credentials.
+Automated checks cover market grouping/cache/freshness, console-versus-PC price-table routing, chart generation, auth/permissions, CSRF rejection, private API queries, dashboard alert creation/branding, demo flows and marketing interactions. PostgreSQL-engine tests (PGlite) apply all application migrations and exercise real SQL for targets, limits, seats, feed runs, tenant isolation and billing reconciliation. Stripe signature tests use fixture events. Production source-database queries, real Discord OAuth/delivery, Stripe sandbox checkout and hosted browser layouts still require deployment verification with your credentials.
 
 ## Plans and billing
 
@@ -140,6 +141,6 @@ X/TweetShift-style ingestion (provider access/costs not configured), sales-histo
 
 ## Runtime diagnostics
 
-The current startup log reports **20 commands**. A log reporting 6 or 17 commands is an older deployment. Redeploy the latest `main` revision. Database pools have finite connection/statement timeouts and idle error listeners. Alert failures report a redacted error code and actionable hint (including disk-full, connection resets, restarts and query timeouts), without printing connection strings. Receiving SIGTERM means the host asked the process to stop; check deployment/host events to establish why. Fontconfig discovery is bundled with the renderer.
+The current startup log reports **21 commands**. A log reporting 6 or 17 commands is an older deployment. Redeploy the latest `main` revision. Database pools have finite connection/statement timeouts and idle error listeners. Alert failures report a redacted error code and actionable hint (including disk-full, connection resets, restarts and query timeouts), without printing connection strings. Receiving SIGTERM means the host asked the process to stop; check deployment/host events to establish why. Fontconfig discovery is bundled with the renderer.
 
 Discord GET requests are coalesced and cached for ten seconds to avoid duplicate permission reads. Writes explicitly bypass cached permission/channel checks. Rate-limit responses respect Retry-After before one bounded retry; longer limits are shown with a wait time. Server discovery intersects the user guild list with the bot guild list rather than probing every user server. Market lists exclude incomplete/unknown metadata; movers show 80+ rated items priced at least 1,000 coins, using a median baseline with at least three observations. Large percentage changes are flagged for verification, not silently removed.

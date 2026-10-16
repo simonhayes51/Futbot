@@ -12,6 +12,8 @@ export class MarketService{
  async snapshot(){const bucket=Math.floor((Date.now()-60000)/300000);if(this.cached&&this.cached.bucket===bucket&&Date.now()-this.cached.at<300000)return this.cached.cards.filter(c=>isFresh(c.capturedAt,this.maxAge));if(this.pending)return this.pending;
  this.pending=this.load().then(cards=>{this.cached={at:Date.now(),bucket,cards};return cards;}).finally(()=>{this.pending=undefined;});return this.pending;}
  private async load():Promise<MarketCard[]>{
+ const historyTable=this.platform==='pc'?'public.futbot_pc_bin_history':this.platform==='ps5'?'public.futgg_bin_history':null;
+ if(!historyTable)throw new Error('Unsupported price platform. Choose PS5 or PC.');
  const {rows}=await this.prices.pool.query(`SELECT p.source_card_id::text AS id,
  COALESCE(p.display_name,p.name,p.full_name,'Unknown card') AS name,
  p.rating,p.primary_position AS position,p.rarity,p.club,
@@ -20,14 +22,14 @@ export class MarketService{
  b.lowest_bin::int AS previous,b.captured_at AS "previousAt"
  FROM public.futgg_players p
  JOIN LATERAL (
- SELECT h.lowest_bin,h.captured_at FROM public.futgg_bin_history h
+ SELECT h.lowest_bin,h.captured_at FROM ${historyTable} h
  WHERE h.source_card_id=p.source_card_id AND h.game_year=$1 AND h.platform=$2 AND h.lowest_bin>0
  AND h.captured_at>=now()-($3::int * interval '1 minute') AND h.captured_at<=now()+interval '1 minute'
  ORDER BY h.captured_at DESC,h.id DESC LIMIT 1
  ) l ON true
  LEFT JOIN LATERAL (
  SELECT percentile_cont(0.5) WITHIN GROUP(ORDER BY h.lowest_bin)::int AS lowest_bin,max(h.captured_at) AS captured_at
- FROM public.futgg_bin_history h
+ FROM ${historyTable} h
  WHERE h.source_card_id=p.source_card_id AND h.game_year=$1 AND h.platform=$2 AND h.lowest_bin>0
  AND h.captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours'
  HAVING count(*)>=3

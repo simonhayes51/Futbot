@@ -15,6 +15,11 @@ export class PriceRepository {
       options: '-c default_transaction_read_only=on', application_name: 'futbot-price-reader' });
     this.pool.on('error',error=>logFailure('Price database idle connection error',error));
   }
+  private historyTable(platform: string) {
+    if (platform === 'pc') return 'public.futbot_pc_bin_history';
+    if (platform === 'ps5') return 'public.futgg_bin_history';
+    throw new Error('Unsupported price platform. Choose PS5 or PC.');
+  }
   async search(query: string): Promise<Card[]> {
     const term = query.replace(/[\\%_]/g, '\\$&').slice(0, 80);
     const { rows } = await this.pool.query(`SELECT source_card_id::text AS id,
@@ -35,20 +40,23 @@ export class PriceRepository {
     return rows[0] || null;});
   }
   async latest(cardId: string, platform: string): Promise<Price | null> {
+    const table=this.historyTable(platform);
     return this.cached('latest:'+platform+':'+cardId,30000,async()=>{
     const { rows } = await this.pool.query(`SELECT source_card_id::text AS "cardId",platform,
-      lowest_bin AS value,captured_at AS "capturedAt" FROM public.futgg_bin_history
+      lowest_bin AS value,captured_at AS "capturedAt" FROM ${table}
       WHERE source_card_id=$1 AND platform=$2 AND game_year=$3 AND lowest_bin>0
       ORDER BY captured_at DESC,id DESC LIMIT 1`, [cardId,platform,this.year]);
     return rows[0]?{...rows[0],value:Number(rows[0].value)}:null;});
   }
   async baseline(cardId:string,platform:string):Promise<{value:number;capturedAt:Date}|null>{
-    return this.cached('baseline:'+platform+':'+cardId,300000,async()=>{const {rows}=await this.pool.query(`SELECT percentile_cont(0.5) WITHIN GROUP(ORDER BY lowest_bin)::int AS value,max(captured_at) AS "capturedAt" FROM public.futgg_bin_history WHERE source_card_id=$1 AND platform=$2 AND game_year=$3 AND lowest_bin>0 AND captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours' HAVING count(*)>=3`,[cardId,platform,this.year]);return rows[0]??null;});
+    const table=this.historyTable(platform);
+    return this.cached('baseline:'+platform+':'+cardId,300000,async()=>{const {rows}=await this.pool.query(`SELECT percentile_cont(0.5) WITHIN GROUP(ORDER BY lowest_bin)::int AS value,max(captured_at) AS "capturedAt" FROM ${table} WHERE source_card_id=$1 AND platform=$2 AND game_year=$3 AND lowest_bin>0 AND captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours' HAVING count(*)>=3`,[cardId,platform,this.year]);return rows[0]??null;});
   }
   async history(cardId: string, platform: string, hours = 24): Promise<{ at: Date; value: number }[]> {
+    const table=this.historyTable(platform);
     return this.cached('history:'+platform+':'+cardId+':'+hours,300000,async()=>{const { rows } = await this.pool.query(`SELECT date_trunc('hour',captured_at) AS at,
       percentile_cont(0.5) WITHIN GROUP (ORDER BY lowest_bin)::int AS value
-      FROM public.futgg_bin_history WHERE source_card_id=$1 AND platform=$2 AND game_year=$3
+      FROM ${table} WHERE source_card_id=$1 AND platform=$2 AND game_year=$3
       AND captured_at>=now()-($4::int * interval '1 hour') AND lowest_bin>0
       GROUP BY 1 ORDER BY 1`,[cardId,platform,this.year,Math.min(hours,168)]);
     return rows;});
