@@ -12,7 +12,7 @@ import {extraCommands,handleTool} from './tools.js';
 import {guildSettings,defaultBrand,watch,type GuildSettings} from './settings.js';
 import { Client, MessageFlags, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, type Interaction } from 'discord.js';
 import { PriceRepository } from './prices.js';
-import { AlertRepository,alertTick,type Alert } from './alerts.js';
+import { AlertRepository,alertTick,fodderAlertTick,type Alert } from './alerts.js';
 import { coins,isFresh,tradeProfit,type Direction,type Card } from './domain.js';
 import { marketChart } from './chart.js';
 import {tradeReceipt} from './boards.js';
@@ -130,7 +130,7 @@ async function handle(i:Interaction){
 
     const [action,id,arg,platformArg]=i.customId.split(':');if(!/^\d+$/.test(id||''))return;
     const actionPlatform=(platformArg==='pc'||platformArg==='ps5')?platformArg:(arg==='pc'||arg==='ps5')?arg:platform;
-    if(action==='watch'){await i.deferReply({flags:MessageFlags.Ephemeral});await resolveCard(id);await watch(alerts.pool,i.user.id,id,year,actionPlatform,(await benefits(alerts.pool,i.user.id)).watch);await i.editReply(`⭐ ${actionPlatform.toUpperCase()} card added to your private watchlist. Use /watchlist or /dashboard.`);return;}
+    if(action==='watch'){await i.deferReply({flags:MessageFlags.Ephemeral});await resolveCard(id);const p=await prices.latest(id,actionPlatform),start=p&&isFresh(p.capturedAt,maxAge)?p.value:null;await watch(alerts.pool,i.user.id,id,year,actionPlatform,(await benefits(alerts.pool,i.user.id)).watch,start);await i.editReply(`⭐ ${actionPlatform.toUpperCase()} card added to your private watchlist${start?` at ${coins(start)} coins`:''}. Use /watchlist or /dashboard.`);return;}
     if(action==='newalert'||action==='abovealert'){
       const modal=new ModalBuilder().setCustomId(`alertmodal:${id}:${action==='abovealert'?'above':'below'}:${actionPlatform}`).setTitle('Set your price target');
       const target=new TextInputBuilder().setCustomId('target').setLabel(action==='abovealert'?'Notify at or above this price (coins)':'Notify at or below this price (coins)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8);
@@ -168,7 +168,7 @@ async function startBot(){
   console.log(`FutBot ready · FC${year} · ${platform} · ${commands.length} commands`);
   const tick=async()=>{if(busy)return;busy=true;try{await alertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{
     const user=await client.users.fetch(userId);const card=await prices.card(a.card_id).catch(()=>null);const b=await guildSettings(alerts.pool,(a as any).guild_id);await context.run(b,()=>user.send({nonce:`fb${a.id}`,enforceNonce:true,components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`history:${a.card_id}:24:${a.platform}`).setLabel('View price & chart').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`watch:${a.card_id}:${a.platform}`).setLabel('Watch card').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`newalert:${a.card_id}:${a.platform}`).setLabel('Set another target').setStyle(ButtonStyle.Secondary))],embeds:[brand(a.platform).setThumbnail(card?.image?.startsWith('https://')?card.image:null).setTitle('🔔 YOUR PRICE TARGET WAS REACHED').setDescription(`**${a.card_name}** · ${card?.rating??'—'} ${card?.position??''} · ${card?.rarity??'Player item'} · ${a.platform.toUpperCase()}`).addFields({name:'Observed price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`})]}));
-  });}catch(error){logFailure('Alert cycle failed',error);}finally{busy=false;}};
+  });await fodderAlertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{const user=await client.users.fetch(userId);await user.send({nonce:`fbf${a.id}`,enforceNonce:true,embeds:[brand(a.platform).setTitle('🧱 FODDER DROP ALERT').setDescription(`**${a.rating}-rated fodder index** on **${a.platform.toUpperCase()}** has reached your target.`).addFields({name:'Current index',value:coins(value)+' coins',inline:true},{name:'Your trigger',value:`Down ${Number(a.drop_percent).toFixed(1)}% · ${coins(Number(a.baseline_price))} → ${coins(Number(a.target_price))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`}).setFooter({text:'Median of the 3 cheapest fresh tradeable cards at this rating'})]});});}catch(error){logFailure('Alert cycle failed',error);}finally{busy=false;}};
   timer=setInterval(()=>void tick(),pollMs);await tick();
   const feedCycle=async()=>{if(feedBusy)return;feedBusy=true;try{await feedTick(alerts.pool,market,process.env.DISCORD_TOKEN!,feedPermission);}catch(e){logFailure('Feed scheduler failed',e);}finally{feedBusy=false;}};
   feedTimer=setInterval(()=>void feedCycle(),60000);await feedCycle();

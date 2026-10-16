@@ -1,7 +1,8 @@
 CREATE TABLE IF NOT EXISTS futbot_watchlist (
  user_id text NOT NULL,card_id bigint NOT NULL,game_year smallint NOT NULL,platform text NOT NULL,
- created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(user_id,card_id,game_year,platform)
+ created_at timestamptz NOT NULL DEFAULT now(),starting_price integer,PRIMARY KEY(user_id,card_id,game_year,platform)
 );
+ALTER TABLE futbot_watchlist ADD COLUMN IF NOT EXISTS starting_price integer;
 CREATE TABLE IF NOT EXISTS futbot_sessions (
  session_hash text PRIMARY KEY,user_id text NOT NULL,profile jsonb NOT NULL,token_cipher text NOT NULL,
  csrf text NOT NULL,expires_at timestamptz NOT NULL

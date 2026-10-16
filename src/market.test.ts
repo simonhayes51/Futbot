@@ -1,8 +1,10 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {MarketService,fodderRows,movers,ratingValue,targetValue,type MarketCard} from './market.js';
+import {MarketService,fodderRows,movers,ratingValue,targetValue,fodderIndex,type MarketCard} from './market.js';
 const c=(id:string,rating:number,value:number,change:number|null):MarketCard=>({id,name:'Card '+id,rating,value,change,position:'CM',rarity:'Gold',club:null,image:null,capturedAt:new Date(),previous:null,previousAt:null});
 test('fodder ladder groups exact ratings and picks cheapest alternatives',()=>{const rows=fodderRows([c('a',85,3000,0),c('b',85,1000,0),c('c',84,500,0)],85);assert.equal(rows.length,1);assert.deepEqual(rows[0].cards.map(c=>c.id),['b','a']);});
+test('fodder index uses the median of the three cheapest fresh tradeable cards',()=>{const cards=[c('a',87,3000,0),c('b',87,1000,0),c('c',87,2000,0),c('d',87,4000,0)];assert.equal(fodderIndex(cards,87),2000);assert.equal(fodderIndex(cards.slice(0,2),87),null);});
 test('movers exclude missing baselines and opposite directions',()=>{const cards=[c('a',85,1000,20),c('b',85,1000,null),c('c',85,1000,-40),c('d',85,1000,30)];assert.deepEqual(movers(cards).map(c=>c.id),['d','a']);assert.deepEqual(movers(cards,'fallers').map(c=>c.id),['c']);});
+test('movers apply card type before choosing the top ten',()=>{const cards=[{...c('a',85,2000,60),rarity:'Gold'},{...c('b',85,2000,40),rarity:'TOTW'}];assert.deepEqual(movers(cards,'risers','TOTW').map(c=>c.id),['b']);});
 test('market cache coalesces requests and withholds expired observations',async()=>{let calls=0;const row={...c('a',85,1000,0),previous:800};const prices:any={year:27,pool:{query:async()=>{calls++;return {rows:[row]};}}};const market=new MarketService(prices,'ps5',15);await Promise.all([market.snapshot(),market.snapshot()]);assert.equal(calls,1);row.capturedAt.setTime(Date.now()-20*60000);assert.equal((await market.snapshot()).length,0);assert.equal(calls,1);});
 test('coin and rating inputs are bounded',()=>{assert.throws(()=>targetValue(NaN));assert.throws(()=>targetValue(0));assert.throws(()=>ratingValue(100));assert.equal(ratingValue(85),85);});
 

@@ -2,7 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {testDatabase} from './test-db.js';
 import {claimSeat,userBenefits,serverPlan} from './plans.js';
 import {nextRun,validateFeed,feedTick,fingerprint,feedPayload} from './feeds.js';
-import {AlertRepository} from './alerts.js';import {watch} from './settings.js';
+import {AlertRepository,fodderAlertTick} from './alerts.js';import {watch} from './settings.js';
 const g='123456789012345678';
 test('daily schedules follow London DST and reject invalid destinations and times',()=>{
  assert.equal(nextRun(['18:05'],'Europe/London',new Date('2026-10-15T12:00:00Z')).toISOString(),'2026-10-15T17:05:00.000Z');
@@ -30,7 +30,15 @@ test('application migrations, limits, ownership and server-seat lifecycle execut
  await assert.rejects(()=>repo.edit('other',String(a.id),2000,'above'),/Only your/);await repo.edit('member',String(a.id),2000,'above');
  const updated=(await pool.query('SELECT * FROM futbot_alerts WHERE id=$1',[a.id])).rows[0];assert.equal(Number(updated.target),2000);assert.equal(updated.direction,'above');
  await pool.query("UPDATE futbot_alerts SET state='queued' WHERE id=$1",[a.id]);await assert.rejects(()=>repo.edit('member',String(a.id),2500,'above'),/queued/);
- await watch(pool,'member','1',27,'ps5',1);await watch(pool,'member','1',27,'ps5',1);await assert.rejects(()=>watch(pool,'member','2',27,'ps5',1),/full/);
+ await watch(pool,'member','1',27,'ps5',1,1234);await watch(pool,'member','1',27,'ps5',1,2000);await assert.equal(Number((await pool.query('SELECT starting_price FROM futbot_watchlist WHERE user_id=$1',["member"])).rows[0].starting_price),1234);await assert.rejects(()=>watch(pool,'member','2',27,'ps5',1),/full/);
+});
+test('rating-wide fodder alerts fire once when the three-card index reaches its drawdown target',async t=>{
+ const {db,pool}=await testDatabase();t.after(()=>db.close());const repo=Object.create(AlertRepository.prototype) as AlertRepository;repo.pool=pool;
+ const id=(await pool.query(`INSERT INTO futbot_fodder_alerts(user_id,game_year,platform,rating,baseline_price,drop_percent,target_price) VALUES('member',27,'pc',87,2000,10,1800) RETURNING id`)).rows[0].id;
+ let current=1801,sends=0;const prices:any={year:27,fodderIndex:async()=>({value:current,capturedAt:new Date()})};
+ await fodderAlertTick(repo,prices,15,async()=>{sends++;});assert.equal(sends,0);assert.equal((await pool.query('SELECT state FROM futbot_fodder_alerts WHERE id=$1',[id])).rows[0].state,'active');
+ current=1800;await fodderAlertTick(repo,prices,15,async()=>{sends++;});assert.equal(sends,1);assert.equal((await pool.query('SELECT state FROM futbot_fodder_alerts WHERE id=$1',[id])).rows[0].state,'triggered');
+ await fodderAlertTick(repo,prices,15,async()=>{sends++;});assert.equal(sends,1);
 });
 test('scheduler posts once, skips unchanged/stale data and isolates tenant lists',async t=>{
  const {db,pool}=await testDatabase();t.after(()=>db.close());

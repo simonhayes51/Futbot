@@ -10,7 +10,7 @@ export class AlertRepository {
   async create(input:{userId:string;guildId:string|null;cardId:string;cardName:string;year:number;platform:string;direction:Direction;target:number},limit=5){
     const c=await this.pool.connect();
     try{await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[input.userId]);
-      const count=await c.query(`SELECT count(*)::int AS n FROM futbot_alerts WHERE user_id=$1 AND state IN ('active','queued','paused')`,[input.userId]);
+      const count=await c.query(`SELECT ((SELECT count(*) FROM futbot_alerts WHERE user_id=$1 AND state IN ('active','queued','paused'))+(SELECT count(*) FROM futbot_fodder_alerts WHERE user_id=$1 AND state IN ('active','queued')))::int AS n`,[input.userId]);
       if(count.rows[0].n>=limit)throw new Error(`You have reached your limit of ${limit} saved alerts.`);
       const {rows}=await c.query<Alert>(`INSERT INTO futbot_alerts(user_id,guild_id,card_id,card_name,game_year,platform,direction,target) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,[input.userId,input.guildId,input.cardId,input.cardName,input.year,input.platform,input.direction,input.target]);
       await c.query('COMMIT');return rows[0];
@@ -51,4 +51,23 @@ export async function alertTick(repo:AlertRepository,prices:PriceRepository,maxA
       }
     }
   }finally{await c.query('SELECT pg_advisory_unlock(428107)').catch(()=>{});c.release();}
+}
+
+export async function fodderAlertTick(repo:AlertRepository,prices:PriceRepository,maxAge:number,send:(userId:string,alert:any,current:number,capturedAt:Date)=>Promise<void>){
+  const c=await repo.pool.connect();
+  try{
+    const lock=await c.query('SELECT pg_try_advisory_lock(428109) AS locked');if(!lock.rows[0].locked)return;
+    const alerts=(await c.query(`SELECT * FROM futbot_fodder_alerts WHERE state='active' AND game_year=$1 ORDER BY id`,[prices.year])).rows;
+    const cache=new Map<string,Awaited<ReturnType<PriceRepository['fodderIndex']>>>();
+    for(const a of alerts){
+      const key=`${a.platform}:${a.rating}`;
+      try{
+        if(!cache.has(key))cache.set(key,await prices.fodderIndex(a.platform,a.rating,maxAge));
+        const index=cache.get(key);if(!index||index.value>Number(a.target_price))continue;
+        const claimed=await c.query(`UPDATE futbot_fodder_alerts SET state='queued',last_error=NULL WHERE id=$1 AND state='active' RETURNING id`,[a.id]);if(!claimed.rowCount)continue;
+        try{await send(a.user_id,a,index.value,index.capturedAt);await c.query(`UPDATE futbot_fodder_alerts SET state='triggered',triggered_at=now() WHERE id=$1 AND state='queued'`,[a.id]);}
+        catch(e){await c.query(`UPDATE futbot_fodder_alerts SET state='failed',last_error=$2 WHERE id=$1 AND state='queued'`,[a.id,e instanceof Error?e.name:'DeliveryError']);logFailure('Fodder alert delivery failed / alert '+a.id,e);}
+      }catch(e){logFailure('Fodder index check failed / alert '+a.id,e);}
+    }
+  }finally{await c.query('SELECT pg_advisory_unlock(428109)').catch(()=>{});c.release();}
 }

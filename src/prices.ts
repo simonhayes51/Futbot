@@ -20,21 +20,25 @@ export class PriceRepository {
     if (platform === 'ps5') return 'public.futgg_bin_history';
     throw new Error('Unsupported price platform. Choose PS5 or PC.');
   }
-  async search(query: string): Promise<Card[]> {
+  async cardTypes():Promise<string[]>{return this.cached('card-types:'+this.year,600000,async()=>(await this.pool.query(`SELECT DISTINCT rarity FROM public.futgg_players WHERE game_year=$1 AND is_active=true AND rarity IS NOT NULL ORDER BY rarity`,[this.year])).rows.map(r=>String(r.rarity)));}
+  async search(query: string,filters:{rarity?:string;rating?:number;position?:string}={}): Promise<Card[]> {
     const term = query.replace(/[\\%_]/g, '\\$&').slice(0, 80);
     const { rows } = await this.pool.query(`SELECT source_card_id::text AS id,
       COALESCE(display_name,name,full_name,'Unknown card') AS name, rating,
-      primary_position AS position, rarity, club,
+      primary_position AS position, rarity, club, league,
       COALESCE(card_image_stored_url,card_image_url,player_image_url) AS image
       FROM public.futgg_players WHERE game_year=$1 AND is_active=true
       AND (COALESCE(name,'') ILIKE $2 OR COALESCE(display_name,'') ILIKE $2 OR source_card_id::text=$3)
-      ORDER BY rating DESC NULLS LAST,source_card_id LIMIT 25`, [this.year, `%${term}%`, query]);
+      AND ($4::text IS NULL OR rarity=$4)
+      AND ($5::int IS NULL OR rating=$5)
+      AND ($6::text IS NULL OR primary_position=$6)
+      ORDER BY rating DESC NULLS LAST,source_card_id LIMIT 100`, [this.year, `%${term}%`, query, filters.rarity||null, filters.rating||null, filters.position||null]);
     return rows;
   }
   async card(id: string): Promise<Card | null> {
     return this.cached('card:'+id,300000,async()=>{
     const { rows } = await this.pool.query(`SELECT source_card_id::text AS id,
-      COALESCE(display_name,name,full_name,'Unknown card') AS name,rating,primary_position AS position,rarity,club,
+      COALESCE(display_name,name,full_name,'Unknown card') AS name,rating,primary_position AS position,rarity,club,league,
       COALESCE(card_image_stored_url,card_image_url,player_image_url) AS image
       FROM public.futgg_players WHERE source_card_id=$1 AND game_year=$2`, [id,this.year]);
     return rows[0] || null;});
@@ -60,5 +64,14 @@ export class PriceRepository {
       AND captured_at>=now()-($4::int * interval '1 hour') AND lowest_bin>0
       GROUP BY 1 ORDER BY 1`,[cardId,platform,this.year,Math.min(hours,168)]);
     return rows;});
+  }
+  async fodderIndex(platform:string,rating:number,maxAgeMinutes=15):Promise<{value:number;capturedAt:Date}|null>{
+    const table=this.historyTable(platform);
+    const {rows}=await this.pool.query(`SELECT percentile_cont(0.5) WITHIN GROUP(ORDER BY v)::int AS value,max(at) AS "capturedAt" FROM (
+      SELECT l.lowest_bin::int AS v,l.captured_at AS at FROM public.futgg_players p JOIN LATERAL (
+        SELECT h.lowest_bin,h.captured_at FROM ${table} h WHERE h.source_card_id=p.source_card_id AND h.game_year=$1 AND h.platform=$2 AND h.lowest_bin>0 AND h.captured_at>=now()-($4::int*interval '1 minute') ORDER BY h.captured_at DESC,h.id DESC LIMIT 1
+      ) l ON true WHERE p.game_year=$1 AND p.is_active=true AND p.rating=$3 AND p.is_tradeable=true AND p.primary_position IS NOT NULL AND COALESCE(p.display_name,p.name,p.full_name,'Unknown card') NOT ILIKE 'unknown%' ORDER BY l.lowest_bin LIMIT 3
+    ) cheapest HAVING count(*)=3`,[this.year,platform,rating,maxAgeMinutes]);
+    return rows[0]?.value===null?null:rows[0]?.value?{value:Number(rows[0].value),capturedAt:rows[0].capturedAt}:null;
   }
 }
