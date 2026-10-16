@@ -70,7 +70,7 @@ export class PriceRepository {
     const {rows}=await this.pool.query(`SELECT percentile_cont(0.5) WITHIN GROUP(ORDER BY v)::int AS value,max(at) AS "capturedAt" FROM (
       SELECT l.lowest_bin::int AS v,l.captured_at AS at FROM public.futgg_players p JOIN LATERAL (
         SELECT h.lowest_bin,h.captured_at FROM ${table} h WHERE h.source_card_id=p.source_card_id AND h.game_year=$1 AND h.platform=$2 AND h.lowest_bin>0 AND h.captured_at>=now()-($4::int*interval '1 minute') ORDER BY h.captured_at DESC,h.id DESC LIMIT 1
-      ) l ON true WHERE p.game_year=$1 AND p.is_active=true AND p.rating=$3 AND p.is_tradeable=true AND p.primary_position IS NOT NULL AND COALESCE(p.display_name,p.name,p.full_name,'Unknown card') NOT ILIKE 'unknown%' ORDER BY l.lowest_bin LIMIT 3
+      ) l ON true WHERE p.game_year=$1 AND p.is_active=true AND p.rating=$3 AND p.primary_position IS NOT NULL AND COALESCE(p.display_name,p.name,p.full_name,'Unknown card') NOT ILIKE 'unknown%' ORDER BY l.lowest_bin LIMIT 3
     ) cheapest HAVING count(*)=3`,[this.year,platform,rating,maxAgeMinutes]);
     return rows[0]?.value===null?null:rows[0]?.value?{value:Number(rows[0].value),capturedAt:rows[0].capturedAt}:null;
   }
