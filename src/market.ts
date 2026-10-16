@@ -35,7 +35,7 @@ export class MarketService{
  AND h.captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours'
  HAVING count(*)>=3
  ) b ON true
- WHERE p.game_year=$1 AND p.is_active=true AND p.is_tradeable=true`,[this.prices.year,this.platform,this.maxAge]);
+ WHERE p.game_year=$1 AND p.is_active=true`,[this.prices.year,this.platform,this.maxAge]);
  return rows.map(r=>({...r,value:Number(r.value),previous:r.previous===null?null:Number(r.previous),change:r.previous?((Number(r.value)-Number(r.previous))/Number(r.previous))*100:null})).filter(completeCard);
  }
 }
