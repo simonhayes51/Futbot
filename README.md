@@ -1,18 +1,19 @@
 # FutBot
 
-Ultimate Team Discord tools, an editorial marketing website and a live Discord-authenticated control room. FC27 / PS5 by default. Reads your existing PostgreSQL catalogue and BIN history; it does not collect prices or connect to EA accounts.
+Ultimate Team Discord tools, an editorial marketing website and a live Discord-authenticated control room. FC27 / PS5 by default. Reads your existing PostgreSQL catalogue and observed player and consumable price history; it does not collect prices or connect to EA accounts.
 
 ## What is implemented
 
-21 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`, `/flip`.
+22 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`, `/flip`, `/consumable`.
 
 - Player artwork, current BIN, freshness, 24-hour/7-day hourly-median graphs, period median lows/highs and after-tax value. Buy/sell alert, watchlist and chart buttons.
 - Fodder boards: cheapest fresh-priced card at each rating (83–91 by default), PNG rating ladder; an optional exact rating shows up to three alternatives.
+- Consumables market: managers, manager leagues and chemistry styles for PC and console; category search, 24-hour movement, interactive seven-day charts, saved-price watchlists and private threshold DMs. Requires the TradeHQ misc-price feed and migration 103 in the shared price database.
 - Movers: top ten risers/fallers against the median of at least three observations 24–25 hours ago. Missing baselines are excluded.
 - Budget finder and two-card price comparison.
 - `/flip` lets traders post a selected PS5/Xbox or PC market call with entry/target, trader-rated risk, card artwork, current price and chart; readers can save the same market to a watchlist or create a matching alert.
 - Cross-device personal watchlists, private target alerts with DM outbox/retries, pause/resume/cancel, DM delivery test. Editable active/paused targets, exact-card artwork, saved vs current BIN, distance to target and timestamp; paginated Discord alert controls.
-- Live dashboard at `/app/`: Discord OAuth, private member data, card explorer, downloadable charts, fodder cards/board download, movers, watchlists, alerts, tax calculator and manual investment records with fresh-price after-tax valuations.
+- Live dashboard at `/app/`: Discord OAuth, private member data, card explorer, downloadable charts, fodder cards/board download, consumables market, movers, watchlists, alerts, tax calculator and manual investment records with fresh-price after-tax valuations.
 - Server manager workspace: server name/accent/footer, destination channel selection, live preview, manual fodder board publishing and activity log. Automatic fodder/movers/market-brief/shared-watchlist feeds, local posting schedules, scoped role mentions, previews, posting history and pause controls. Shared server lists and sponsored-seat management. Saved settings are used by new bot embeds; this does not rename the bot account or avatar.
 
 The original browser-local prototype is preserved at `/demo/`. `/app/` now uses the backend API rather than demo data. Personal alerts, watchlists and investments never appear in server-admin views.
@@ -67,11 +68,11 @@ An omitted `DISCORD_GUILD_ID` registers commands globally. If set, the bot must 
 
 ## Data and schema
 
-Use separate price and application databases. `npm run migrate` applies the idempotent SQL files in `sql/` to the application database only. The price pool sets default transactions read-only. Website sessions, alerts, delivery outbox, watchlists, server settings, activity, investments, feed schedules/runs, shared lists, subscription state and seats live in the application database.
+Use separate price and application databases. `npm run migrate` applies the idempotent SQL files in `sql/` to the application database only. The price pool sets default transactions read-only. Website sessions, player/fodder/consumable alerts, delivery outbox, player and consumable watchlists, server settings, activity, investments, feed schedules/runs, shared lists, subscription state and seats live in the application database.
 
-Price catalogue: `public.futgg_players`. Console observations: `public.futgg_bin_history`; PC observations: `public.futbot_pc_bin_history`. Preserve the game/platform filters in `src/prices.ts` and `src/market.ts`. FutBot stays read-only on the price database. To enable PC prices, apply TradeHQ’s `backend/migrations/101_futbot_pc_bin_history.sql` to the price database and run a second collector with `FUTGG_BULK_PLATFORM=pc`; see `auto_sync/FUTBOT_PC_PRICE_WORKER.md`.
+Price catalogue: `public.futgg_players`. Console observations: `public.futgg_bin_history`; PC observations: `public.futbot_pc_bin_history`. Manager, manager-league and chemistry-style observations are read from `public.futgg_misc_price_history`. The consumables page and `/consumable` command need the TradeHQ misc-feed change and migration 103 on the same price database; see [TradeHQ PR #392](https://github.com/simonhayes51/tradehq/pull/392). FutBot’s `npm run migrate` applies its own watchlist/alert tables to the application database. Preserve the game/platform filters in `src/prices.ts` and `src/market.ts`. FutBot stays read-only on the price database. To enable PC prices, apply TradeHQ’s `backend/migrations/101_futbot_pc_bin_history.sql` to the price database and run a second collector with `FUTGG_BULK_PLATFORM=pc`; see `auto_sync/FUTBOT_PC_PRICE_WORKER.md`.
 
-Market snapshots are shared and cached for five minutes per process, coalescing concurrent reads. Expired observations are withheld even within the cache. They require fresh observations (15 minutes by default). Price source queries time out after eight seconds. If market queries time out on a large database, check source indexes and query plans with the database owner: this app intentionally does not add indexes to your source database.
+Player market snapshots are shared and cached for five minutes per process, coalescing concurrent reads. Consumable prices are cached for 30 seconds. Player observations older than the configured freshness threshold (15 minutes by default) are withheld; consumables allow up to 30 minutes because the source worker stores unchanged prices on a staggered heartbeat. Price source queries time out after eight seconds. If market queries time out on a large database, check source indexes and query plans with the database owner: this app intentionally does not add indexes to your source database.
 
 Price graphs use hourly medians, not every raw observation. Movement compares latest BIN with a baseline median, not trading advice. Fodder means cheapest available catalogue items at a rating: no guarantee of SBC eligibility, tradeability or an obtainable listing. Investment records are manual and unrealised; they do not sync with an EA club. Stale/unavailable holdings are excluded from profit totals.
 
