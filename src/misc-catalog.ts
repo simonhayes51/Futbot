@@ -42,7 +42,7 @@ export class MiscCatalog {
     for (const [id,name] of Object.entries(CHEMISTRY_STYLES)) this.names.set('chemistry_style:'+id,name);
   }
   label(type: CatalogItemType, id: string): string {
-    return this.names.get(type+':'+id) ?? (type === 'manager' ? 'Manager' : type === 'manager_league' ? 'Manager league' : 'Chemistry style');
+    return this.names.get(type+':'+id) ?? (type === 'manager' ? 'Manager' : type === 'manager_league' ? 'Manager league' : 'Chemistry style') + ' #' + id;
   }
   async load(): Promise<void> {
     if (this.loaded) return;
