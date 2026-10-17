@@ -36,7 +36,7 @@ async function renderConsumables(){
  const pct=i=>i.baseline_price&&i.price!==null?(Number(i.price)-Number(i.baseline_price))/Number(i.baseline_price)*100:null;
  const alertCount=(miscData.alerts??[]).filter(a=>['active','queued'].includes(a.state)).length;
  const tabs=[['all','ALL ITEMS'],['manager','MANAGERS'],['manager_league','MANAGER LEAGUES'],['chemistry_style','CHEM STYLES']];
- const marketRows=sorted.map(i=>{
+ const marketRows=sorted.filter(i=>!miscSearch||(itemLabel(i)+' '+i.status+' '+i.item_id).toLowerCase().includes(miscSearch.toLowerCase())).map(i=>{
   const key=`${i.item_type}:${i.item_id}`,p=pct(i),hasPrice=i.price!==null&&Number(i.price)>0,stale=!i.fresh&&hasPrice;
   return `<div class="consumable-wrap" data-search="${esc((itemLabel(i)+' '+i.status+' '+i.item_id).toLowerCase())}">
    <div class="consumable-row">
