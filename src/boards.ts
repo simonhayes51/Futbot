@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { escapeXml,coins } from './domain.js';
 import type { MarketCard } from './market.js';
 import { fodderRows } from './market.js';
+import type { MiscMarketItem } from './prices.js';
+import type { GuildSettings } from './settings.js';
 const fontfile=fileURLToPath(new URL('../assets/fonts/DejaVuSans.ttf',import.meta.url));
 export async function fodderBoard(cards:MarketCard[],rating?:number,year=27,brand?:{name:string;accent:string;footer:string}){
  const rows=fodderRows(cards,rating),height=145+rows.length*57;
@@ -29,4 +31,35 @@ export async function tradeReceipt(buy:number,sell:number,quantity:number){
  await label('PROFIT AFTER 5% EA TAX',42,105,12,690,'#aab9ca');await label(`${profit>=0?'+':''}${coins(profit)} COINS`,42,132,35,690,profit>=0?'#83dec9':'#ffad80');
  for(const [i,labelText,value]of [[0,'TAX / ALL COPIES',tax],[1,'NET SALE / COPY',net],[2,'BREAK-EVEN / COPY',breakEven]] as const){await label(labelText,24+i*250,224,10,225,'#aab9ca');await label(coins(value),24+i*250,248,22,225);}
  await label('BREAK-EVEN IS MATHEMATICAL / ROUND UP TO A VALID MARKET LISTING INCREMENT',24,308,9,730,'#aab9ca');return sharp(Buffer.from(svg)).composite(overlay).png().toBuffer();
+}
+
+export function rankConsumables(items:MiscMarketItem[],direction:'risers'|'fallers'|'all'='all',limit=6){
+ const rows=items.filter(item=>Number(item.price)>0&&Number(item.baseline_price)>0).map(item=>({...item,change_pct:(Number(item.price)-Number(item.baseline_price!))/Number(item.baseline_price!)*100}));
+ const selected=direction==='risers'?rows.filter(item=>item.change_pct>0).sort((a,b)=>b.change_pct-a.change_pct):direction==='fallers'?rows.filter(item=>item.change_pct<0).sort((a,b)=>a.change_pct-b.change_pct):rows.sort((a,b)=>Math.abs(b.change_pct)-Math.abs(a.change_pct));
+ return selected.slice(0,Math.max(1,Math.min(12,limit)));
+}
+export async function consumablesBoard(items:MiscMarketItem[],platform:string,year=27,brand?:GuildSettings){
+ const rises=rankConsumables(items,'risers',6),falls=rankConsumables(items,'fallers',6),height=590;
+ const accent=brand&&/^#[0-9a-f]{6}$/i.test(brand.accent)?brand.accent:'#3458ff';
+ const bg=`<svg xmlns="http://www.w3.org/2000/svg" width="960" height="${height}"><rect width="960" height="${height}" fill="#121c28"/><rect width="960" height="5" fill="${accent}"/><rect x="24" y="105" width="444" height="420" rx="10" fill="#172536"/><rect x="492" y="105" width="444" height="420" rx="10" fill="#172536"/><rect x="24" y="105" width="444" height="4" fill="#65d7a4"/><rect x="492" y="105" width="444" height="4" fill="#ff8459"/></svg>`;
+ const overlays:sharp.OverlayOptions[]=[];
+ async function label(text:string,left:number,top:number,size:number,width:number,color='#f3f5f7'){
+  const input=await sharp({text:{text:`<span foreground="${color}">${escapeXml(text)}</span>`,font:`DejaVu Sans ${size}`,fontfile,rgba:true}}).resize({width,height:size+8,fit:'inside',withoutEnlargement:true}).png().toBuffer();overlays.push({input,left,top});
+ }
+ const tag=(type:string)=>type==='manager'?'MANAGER':type==='manager_league'?'LEAGUE':'CHEM STYLE';
+ const row=async(item:typeof rises[number]|undefined,left:number,top:number)=>{
+  if(!item){await label('No qualifying movement yet',left+14,top+12,13,390,'#aab9ca');return;}
+  const name=item.display_name||(`${tag(item.item_type)} #${item.item_id}`);
+  await label(name,left+14,top+8,15,245);
+  await label(tag(item.item_type),left+14,top+32,9,170,'#aab9ca');
+  await label(coins(Number(item.price)),left+266,top+11,13,94,'#f3f5f7');
+  await label((item.change_pct>0?'+':'')+item.change_pct.toFixed(1)+'%',left+362,top+11,13,67,item.change_pct>=0?'#83dec9':'#ffad80');
+ };
+ await label((brand?.name??'FUTBOT').toUpperCase()+' / CONSUMABLES MARKET',26,24,24,900);
+ await label(`TOP 24-HOUR MOVES • ${platform.toUpperCase()} • FC${year}`,26,61,12,900,'#aab9ca');
+ await label('BIGGEST RISES',42,123,14,390,'#83dec9');
+ await label('BIGGEST DROPS',510,123,14,390,'#ffad80');
+ for(let i=0;i<6;i++){const y=157+i*59;await row(rises[i],42,y);await row(falls[i],510,y);}
+ await label(`${brand?.footer??'FutBot'} • Observed lowest BIN vs median observation from 24–25h ago • Check in-game`,26,height-34,10,910,'#aab9ca');
+ return sharp(Buffer.from(bg)).composite(overlays).png().toBuffer();
 }
