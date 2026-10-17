@@ -2,7 +2,7 @@ import pg from 'pg';
 import {logFailure} from './logging.js';
 import type { Card, Price } from './domain.js';
 export type MiscItemType='manager'|'manager_league'|'chemistry_style';
-export type MiscMarketItem={item_type:MiscItemType;item_id:string;price:number|null;status:string;captured_at:Date;price_updated_at:Date|null;last_checked_at:Date|null;baseline_price?:number|null};
+export type MiscMarketItem={item_type:MiscItemType;item_id:string;price:number|null;status:string;captured_at:Date;price_updated_at:Date|null;last_checked_at:Date|null;baseline_price?:number|null;display_name?:string|null};
 export const isMiscItemType=(value:unknown):value is MiscItemType=>value==='manager'||value==='manager_league'||value==='chemistry_style';
 export function miscItemLabel(itemType:MiscItemType,itemId:string){return itemType==='manager'?'Manager #'+itemId:itemType==='manager_league'?'Manager league #'+itemId:'Chemistry style #'+itemId;}
 export class PriceRepository {
@@ -87,6 +87,11 @@ export class PriceRepository {
         FROM public.futgg_misc_price_history
         WHERE game_year=$1 AND platform=$2
         ORDER BY item_type,item_id,captured_at DESC,id DESC
+      ), league_catalog AS (
+        SELECT league_source_id::text AS league_id,MIN(league) AS display_name
+        FROM public.futgg_players
+        WHERE game_year=$1 AND league_source_id IS NOT NULL AND league IS NOT NULL
+        GROUP BY league_source_id
       ), baseline AS (
         SELECT item_type,item_id,
           percentile_cont(0.5) WITHIN GROUP (ORDER BY price)::int AS baseline_price
@@ -96,8 +101,10 @@ export class PriceRepository {
         GROUP BY item_type,item_id HAVING count(*)>=1
       )
       SELECT l.item_type,l.item_id::text,l.price,l.status,l.captured_at,
-        l.price_updated_at,l.last_checked_at,b.baseline_price
+        l.price_updated_at,l.last_checked_at,b.baseline_price,
+        CASE WHEN l.item_type='manager_league' THEN lc.display_name ELSE NULL END AS display_name
       FROM latest l LEFT JOIN baseline b USING(item_type,item_id)
+      LEFT JOIN league_catalog lc ON l.item_type='manager_league' AND l.item_id::text=lc.league_id
       ORDER BY l.item_type,l.item_id`,[this.year,platform]);
       return rows.map(r=>({...r,item_id:String(r.item_id),price:r.price===null?null:Number(r.price),baseline_price:r.baseline_price===null?null:Number(r.baseline_price)}));
     });
@@ -105,11 +112,15 @@ export class PriceRepository {
   async miscLatest(itemType:MiscItemType,itemId:string,platform:string):Promise<MiscMarketItem|null>{
     if(!isMiscItemType(itemType)||!/^\d+$/.test(itemId)||!['ps5','pc'].includes(platform))throw new Error('Choose a valid consumable and market.');
     return this.cached('misc-latest:'+platform+':'+itemType+':'+itemId,30000,async()=>{
-      const {rows}=await this.pool.query(`SELECT item_type,item_id::text,price,status,captured_at,
-        price_updated_at,last_checked_at
-        FROM public.futgg_misc_price_history
-        WHERE game_year=$1 AND platform=$2 AND item_type=$3 AND item_id=$4
-        ORDER BY captured_at DESC,id DESC LIMIT 1`,[this.year,platform,itemType,itemId]);
+      const {rows}=await this.pool.query(`SELECT h.item_type,h.item_id::text,h.price,h.status,h.captured_at,
+        h.price_updated_at,h.last_checked_at,
+        CASE WHEN h.item_type='manager_league' THEN (
+          SELECT MIN(p.league) FROM public.futgg_players p
+          WHERE p.game_year=h.game_year AND p.league_source_id::text=h.item_id::text
+        ) ELSE NULL END AS display_name
+        FROM public.futgg_misc_price_history h
+        WHERE h.game_year=$1 AND h.platform=$2 AND h.item_type=$3 AND h.item_id=$4
+        ORDER BY h.captured_at DESC,h.id DESC LIMIT 1`,[this.year,platform,itemType,itemId]);
       const row=rows[0];return row?{...row,item_id:String(row.item_id),price:row.price===null?null:Number(row.price)}:null;
     });
   }
