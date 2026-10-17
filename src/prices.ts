@@ -1,6 +1,9 @@
 import pg from 'pg';
 import {logFailure} from './logging.js';
 import type { Card, Price } from './domain.js';
+export type MiscItemType='manager'|'manager_league'|'chemistry_style';
+export type MiscMarketItem={item_type:MiscItemType;item_id:string;price:number|null;status:string;captured_at:Date;price_updated_at:Date|null;last_checked_at:Date|null;baseline_price?:number|null};
+export const isMiscItemType=(value:unknown):value is MiscItemType=>value==='manager'||value==='manager_league'||value==='chemistry_style';
 export class PriceRepository {
   pool: pg.Pool;
   private reads=new Map<string,{until:number;value:Promise<any>}>();
@@ -73,5 +76,54 @@ export class PriceRepository {
       ) l ON true WHERE p.game_year=$1 AND p.is_active=true AND p.rating=$3 AND p.primary_position IS NOT NULL AND COALESCE(p.display_name,p.name,p.full_name,'Unknown card') NOT ILIKE 'unknown%' ORDER BY l.lowest_bin LIMIT 3
     ) cheapest HAVING count(*)=3`,[this.year,platform,rating,maxAgeMinutes]);
     return rows[0]?.value===null?null:rows[0]?.value?{value:Number(rows[0].value),capturedAt:rows[0].capturedAt}:null;
+  async miscItems(platform:string):Promise<MiscMarketItem[]>{
+    if(!['ps5','pc'].includes(platform))throw new Error('Unsupported price platform. Choose PS5 or PC.');
+    return this.cached('misc-items:'+platform,30000,async()=>{
+      const {rows}=await this.pool.query(`WITH latest AS (
+        SELECT DISTINCT ON (item_type,item_id)
+          item_type,item_id,price,status,captured_at,price_updated_at,last_checked_at
+        FROM public.futgg_misc_price_history
+        WHERE game_year=$1 AND platform=$2
+        ORDER BY item_type,item_id,captured_at DESC,id DESC
+      ), baseline AS (
+        SELECT item_type,item_id,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY price)::int AS baseline_price
+        FROM public.futgg_misc_price_history
+        WHERE game_year=$1 AND platform=$2 AND price>0
+          AND captured_at BETWEEN now()-interval '25 hours' AND now()-interval '24 hours'
+        GROUP BY item_type,item_id HAVING count(*)>=1
+      )
+      SELECT l.item_type,l.item_id::text,l.price,l.status,l.captured_at,
+        l.price_updated_at,l.last_checked_at,b.baseline_price
+      FROM latest l LEFT JOIN baseline b USING(item_type,item_id)
+      ORDER BY l.item_type,l.item_id`,[this.year,platform]);
+      return rows.map(r=>({...r,item_id:String(r.item_id),price:r.price===null?null:Number(r.price),baseline_price:r.baseline_price===null?null:Number(r.baseline_price)}));
+    });
+  }
+  async miscLatest(itemType:MiscItemType,itemId:string,platform:string):Promise<MiscMarketItem|null>{
+    if(!isMiscItemType(itemType)||!/^\\d+$/.test(itemId)||!['ps5','pc'].includes(platform))throw new Error('Choose a valid consumable and market.');
+    return this.cached('misc-latest:'+platform+':'+itemType+':'+itemId,30000,async()=>{
+      const {rows}=await this.pool.query(`SELECT item_type,item_id::text,price,status,captured_at,
+        price_updated_at,last_checked_at
+        FROM public.futgg_misc_price_history
+        WHERE game_year=$1 AND platform=$2 AND item_type=$3 AND item_id=$4
+        ORDER BY captured_at DESC,id DESC LIMIT 1`,[this.year,platform,itemType,itemId]);
+      const row=rows[0];return row?{...row,item_id:String(row.item_id),price:row.price===null?null:Number(row.price)}:null;
+    });
+  }
+  async miscHistory(itemType:MiscItemType,itemId:string,platform:string,hours=24):Promise<{at:Date;value:number}[]>{
+    if(!isMiscItemType(itemType)||!/^\\d+$/.test(itemId)||!['ps5','pc'].includes(platform))throw new Error('Choose a valid consumable and market.');
+    const span=Math.max(1,Math.min(hours,168));
+    return this.cached('misc-history:'+platform+':'+itemType+':'+itemId+':'+span,120000,async()=>{
+      const {rows}=await this.pool.query(`SELECT date_trunc('hour',captured_at) AS at,
+        percentile_cont(0.5) WITHIN GROUP(ORDER BY price)::int AS value
+        FROM public.futgg_misc_price_history
+        WHERE game_year=$1 AND platform=$2 AND item_type=$3 AND item_id=$4
+          AND price>0 AND captured_at>=now()-($5::int*interval '1 hour')
+        GROUP BY 1 ORDER BY 1`,[this.year,platform,itemType,itemId,span]);
+      return rows.map(r=>({...r,value:Number(r.value)}));
+    });
+  }
+
   }
 }
