@@ -73,6 +73,7 @@ export class MiscCatalog {
   private names = new Map<string,string>();
   private loaded = false;
   private refreshing?: Promise<number>;
+  private refreshAttempted=false;
   constructor(private readonly pool: pg.Pool, private readonly year: number) {
     for (const [id,name] of Object.entries(CHEMISTRY_STYLES)) this.names.set('chemistry_style:'+id,name);
   }
@@ -82,6 +83,7 @@ export class MiscCatalog {
   async ready(): Promise<void> {
     try { await this.load(); } catch {}
     if (this.refreshing) await this.refreshing.catch(() => {});
+    else if (!this.refreshAttempted) await this.refresh().catch(() => {});
   }
   async load(): Promise<void> {
     if (this.loaded) return;
@@ -94,6 +96,7 @@ export class MiscCatalog {
   }
   async refresh(): Promise<number> {
     if (this.refreshing) return this.refreshing;
+    this.refreshAttempted=true;
     const task=(async()=>{
       await this.load();
       const rows:Array<{type:CatalogItemType;id:string;name:string;source:string}>=[];
