@@ -83,6 +83,7 @@ async function showPrice(card:Card,hours=24,pricePlatform=platform){
   return {embeds:[embed],files,components:[row]};
 }
 async function showMiscPrice(itemType:MiscItemType,itemId:string,range=24,pricePlatform=platform){
+  await miscCatalog.ready();
   const [item,history]=await Promise.all([prices.miscLatest(itemType,itemId,pricePlatform),prices.miscHistory(itemType,itemId,pricePlatform,range)]);
   const label=item?.display_name||miscCatalog.label(itemType,itemId),embed=brand(pricePlatform).setTitle(`🧴 ${label}`).setDescription(`FC${year} ${itemType.replaceAll('_',' ')}`);
   if(!item){embed.addFields({name:'Market status',value:'No price observation has been captured for this item yet.'});return {embeds:[embed],files:[],components:[]};}
@@ -165,6 +166,7 @@ async function handle(i:Interaction){
     if(i.commandName==='consumable'){
       const type=i.options.getString('type')??'',pricePlatform=i.options.getString('platform')??platform;
       if(!isMiscItemType(type)){await i.respond([]);return;}
+      await miscCatalog.ready();
       const items=await prices.miscItems(pricePlatform);
       const query=String(q).trim().toLocaleLowerCase();
       const choices=items.filter(item=>item.item_type===type&&(!query||item.item_id.includes(query)||(item.display_name||miscCatalog.label(type,item.item_id)).toLocaleLowerCase().includes(query))).slice(0,25).map(item=>({name:`${item.display_name||miscCatalog.label(type,item.item_id)} · ${item.price===null?'No listings':coins(item.price)+' coins'}`.slice(0,100),value:item.item_id}));
