@@ -36,7 +36,7 @@ const commands=[...extraCommands,
   new SlashCommandBuilder().setName('price').setDescription('Check a card price with artwork and market history').addStringOption(playerOption).addStringOption(o=>o.setName('platform').setDescription('Market for this price lookup').addChoices({name:'PS5 / Xbox · Console',value:'ps5'},{name:'PC',value:'pc'})),
   new SlashCommandBuilder().setName('consumable').setDescription('Check a manager or consumable price and chart')
     .addStringOption(o=>o.setName('type').setDescription('Consumable category').setRequired(true).addChoices({name:'Manager',value:'manager'},{name:'Manager league',value:'manager_league'},{name:'Chemistry style',value:'chemistry_style'}))
-    .addStringOption(o=>o.setName('item').setDescription('Choose a feed item by its source ID').setRequired(true).setAutocomplete(true))
+    .addStringOption(o=>o.setName('item').setDescription('Search by manager or consumable name').setRequired(true).setAutocomplete(true))
     .addStringOption(o=>o.setName('platform').setDescription('Market for this lookup').addChoices({name:'PS5 / Xbox · Console',value:'ps5'},{name:'PC',value:'pc'})),
   new SlashCommandBuilder().setName('flip').setDescription('Post a player flip with live market context and member actions')
     .addStringOption(playerOption)
