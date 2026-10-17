@@ -4,6 +4,7 @@ import type { Card, Price } from './domain.js';
 export type MiscItemType='manager'|'manager_league'|'chemistry_style';
 export type MiscMarketItem={item_type:MiscItemType;item_id:string;price:number|null;status:string;captured_at:Date;price_updated_at:Date|null;last_checked_at:Date|null;baseline_price?:number|null};
 export const isMiscItemType=(value:unknown):value is MiscItemType=>value==='manager'||value==='manager_league'||value==='chemistry_style';
+export function miscItemLabel(itemType:MiscItemType,itemId:string){const label=itemType==='manager'?'Manager':itemType==='manager_league'?'Manager league':'Chemistry style';return `${label} #${itemId}`;}
 export class PriceRepository {
   pool: pg.Pool;
   private reads=new Map<string,{until:number;value:Promise<any>}>();
