@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS futbot_shared_cards (
  game_year smallint NOT NULL,platform text NOT NULL,created_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(list_id,card_id,game_year,platform)
 );
 CREATE TABLE IF NOT EXISTS futbot_feeds (
- id bigserial PRIMARY KEY,guild_id text NOT NULL,kind text NOT NULL CHECK(kind IN ('fodder','movers','watchlist','summary')),
+ id bigserial PRIMARY KEY,guild_id text NOT NULL,kind text NOT NULL CHECK(kind IN ('fodder','movers','watchlist','summary','consumables')),
  name text NOT NULL CHECK(length(name) BETWEEN 1 AND 60),channel_id text NOT NULL,role_id text,
  timezone text NOT NULL DEFAULT 'Europe/London',times jsonb NOT NULL DEFAULT '["18:05"]',
  list_id bigint REFERENCES futbot_shared_lists(id) ON DELETE CASCADE,
