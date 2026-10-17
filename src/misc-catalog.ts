@@ -79,7 +79,7 @@ export class MiscCatalog {
   label(type: CatalogItemType, id: string): string {
     return this.names.get(type+':'+id) ?? (type === 'manager' ? 'Manager' : type === 'manager_league' ? 'Manager league' : 'Chemistry style') + ' #' + id;
   }
-  async load(): Promise<void> {
+  async ready(): Promise<void> {\n    try { await this.load(); } catch {}\n    if (this.refreshing) await this.refreshing.catch(() => {});\n  }\n  async load(): Promise<void> {
     if (this.loaded) return;
     const {rows}=await this.pool.query(
       'SELECT item_type,item_id::text,display_name FROM futbot_misc_item_catalog WHERE game_year=$1',
