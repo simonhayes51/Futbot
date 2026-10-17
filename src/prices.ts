@@ -76,6 +76,7 @@ export class PriceRepository {
       ) l ON true WHERE p.game_year=$1 AND p.is_active=true AND p.rating=$3 AND p.primary_position IS NOT NULL AND COALESCE(p.display_name,p.name,p.full_name,'Unknown card') NOT ILIKE 'unknown%' ORDER BY l.lowest_bin LIMIT 3
     ) cheapest HAVING count(*)=3`,[this.year,platform,rating,maxAgeMinutes]);
     return rows[0]?.value===null?null:rows[0]?.value?{value:Number(rows[0].value),capturedAt:rows[0].capturedAt}:null;
+  }
   async miscItems(platform:string):Promise<MiscMarketItem[]>{
     if(!['ps5','pc'].includes(platform))throw new Error('Unsupported price platform. Choose PS5 or PC.');
     return this.cached('misc-items:'+platform,30000,async()=>{
@@ -123,7 +124,5 @@ export class PriceRepository {
         GROUP BY 1 ORDER BY 1`,[this.year,platform,itemType,itemId,span]);
       return rows.map(r=>({...r,value:Number(r.value)}));
     });
-  }
-
   }
 }
