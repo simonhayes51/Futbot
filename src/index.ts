@@ -87,14 +87,14 @@ async function showMiscPrice(itemType:MiscItemType,itemId:string,range=24,priceP
   const [item,history]=await Promise.all([prices.miscLatest(itemType,itemId,pricePlatform),prices.miscHistory(itemType,itemId,pricePlatform,range)]);
   const label=item?.display_name||miscCatalog.label(itemType,itemId),embed=brand(pricePlatform).setTitle(`🧴 ${label}`).setDescription(`FC${year} ${itemType.replaceAll('_',' ')}`);
   if(!item){embed.addFields({name:'Market status',value:'No price observation has been captured for this item yet.'});return {embeds:[embed],files:[],components:[]};}
-  const fresh=item.price!==null&&item.price>0&&isFresh(item.captured_at,Math.max(30,maxAge)),period=range===168?'7-day':'24-hour',files:AttachmentBuilder[]=[];
+  const checkedAt=item.last_checked_at??item.captured_at,fresh=item.price!==null&&item.price>0&&isFresh(checkedAt,Math.max(30,maxAge)),period=range===168?'7-day':'24-hour',files:AttachmentBuilder[]=[];
   if(item.price===null||item.price<=0){embed.addFields({name:'CURRENT MARKET',value:`No active listing · ${String(item.status).replaceAll('_',' ')}`,inline:true});}
   else{
-    embed.addFields({name:'CURRENT PRICE',value:`**${coins(item.price)} coins**`,inline:true},{name:'PRICE UPDATED',value:`<t:${Math.floor(new Date(item.captured_at).getTime()/1000)}:R>${fresh?'':' · ⚠ STALE'}`,inline:true});
+    embed.addFields({name:'CURRENT PRICE',value:`**${coins(item.price)} coins**`,inline:true},{name:'LAST CHECKED',value:`<t:${Math.floor(new Date(checkedAt).getTime()/1000)}:R>${fresh?'':' · ⚠ STALE'}`,inline:true});
     if(history.length>1){const change=(item.price-history[0].value)/history[0].value*100;embed.addFields({name:`${period.toUpperCase()} CHANGE`,value:`${change>=0?'+':''}${change.toFixed(1)}%`,inline:true});}
     if(history.length){const values=history.map(p=>p.value);embed.addFields({name:`${period.toUpperCase()} LOW`,value:coins(Math.min(...values))+' coins',inline:true},{name:`${period.toUpperCase()} HIGH`,value:coins(Math.max(...values))+' coins',inline:true},{name:'AFTER 5% TAX',value:coins(Math.floor(item.price*.95))+' coins',inline:true});}
   }
-  embed.setFooter({text:`${context.getStore()?.footer??defaultBrand.footer} • FC${year} • ${pricePlatform.toUpperCase()} • Observed price`}).setTimestamp(item.captured_at);
+  embed.setFooter({text:`${context.getStore()?.footer??defaultBrand.footer} • FC${year} • ${pricePlatform.toUpperCase()} • Observed price`}).setTimestamp(checkedAt);
   if(history.length>1){const png=await marketChart(`${label} / ${period} history`,history);if(png){files.push(new AttachmentBuilder(png,{name:'consumable-market.png'}));embed.setImage('attachment://consumable-market.png');}}
   const row=new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId(`miscalert:${itemType}:${itemId}:below:${pricePlatform}`).setLabel('Alert below').setEmoji('🔔').setStyle(ButtonStyle.Primary).setDisabled(!fresh||item.price===null),
@@ -113,7 +113,7 @@ async function saveMiscWatch(userId:string,itemType:MiscItemType,itemId:string,p
     if(!exists.rowCount){
       const count=await c.query(`SELECT ((SELECT count(*) FROM futbot_watchlist WHERE user_id=$1)+(SELECT count(*) FROM futbot_misc_watchlist WHERE user_id=$1))::int AS n`,[userId]);
       if(Number(count.rows[0].n)>=access.watch)throw new Error(`Your saved watchlist limit is ${access.watch}.`);
-      const latest=await prices.miscLatest(itemType,itemId,pricePlatform),start=latest&&latest.price!==null&&latest.price>0&&isFresh(latest.captured_at,Math.max(30,maxAge))?latest.price:null;
+      const latest=await prices.miscLatest(itemType,itemId,pricePlatform),start=latest&&latest.price!==null&&latest.price>0&&isFresh(latest.last_checked_at??latest.captured_at,Math.max(30,maxAge))?latest.price:null;
       await c.query(`INSERT INTO futbot_misc_watchlist(user_id,game_year,platform,item_type,item_id,starting_price) VALUES($1,$2,$3,$4,$5,$6)`,[userId,year,pricePlatform,itemType,itemId,start]);
     }
     await c.query('COMMIT');
@@ -169,7 +169,7 @@ async function handle(i:Interaction){
       await miscCatalog.ready();
       const items=await prices.miscItems(pricePlatform);
       const query=String(q).trim().toLocaleLowerCase();
-      const choices=items.filter(item=>item.item_type===type&&(!query||item.item_id.includes(query)||(item.display_name||miscCatalog.label(type,item.item_id)).toLocaleLowerCase().includes(query))).slice(0,25).map(item=>({name:`${item.display_name||miscCatalog.label(type,item.item_id)} · ${item.price===null?'No listings':coins(item.price)+' coins'}`.slice(0,100),value:item.item_id}));
+      const choices=items.filter(item=>item.item_type===type&&(!query||item.item_id.includes(query)||(item.display_name||miscCatalog.label(type,item.item_id)).toLocaleLowerCase().includes(query))).slice(0,25).map(item=>{const checked=item.last_checked_at??item.captured_at,age=checked?Math.max(0,Math.floor((Date.now()-new Date(checked).getTime())/60000)):null,time=age===null?'':` · ${age<=1?'now':age+'m ago'}${age>Math.max(30,maxAge)?' ⚠ stale':''}`;return {name:`${item.display_name||miscCatalog.label(type,item.item_id)} · ${item.price===null?'No listings':coins(item.price)+' coins'}${time}`.slice(0,100),value:item.item_id};});
       await i.respond(choices);return;
     }
     if(q.length<2){await i.respond([]);return;}
@@ -195,7 +195,7 @@ async function handle(i:Interaction){
     if(action==='history'){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showPrice(await resolveCard(id),arg==='168'?168:24,actionPlatform));return;}
   }
   if(i.isModalSubmit()&&i.customId.startsWith('edittarget:')){await i.deferReply({flags:MessageFlags.Ephemeral});const id=i.customId.split(':')[1],a=(await alerts.list(i.user.id)).find(a=>a.id===id);if(!a)throw new Error('Alert not found.');await alerts.edit(i.user.id,id,Number(i.fields.getTextInputValue('target')),a.direction);await i.editReply(await showAlerts(i.user.id));return;}
-  if(i.isModalSubmit()&&i.customId.startsWith('miscmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,type,id,direction,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))throw new Error('Choose a valid consumable.');const target=Number(i.fields.getTextInputValue('target')),latest=await prices.miscLatest(type,id,pricePlatform);if(!Number.isInteger(target)||target<1||target>15000000)throw new Error('Choose a valid target price.');if(!latest||latest.price===null||latest.price<=0||!isFresh(latest.captured_at,Math.max(30,maxAge)))throw new Error('No fresh listed price is available for this item.');const itemLabel=latest.display_name||miscCatalog.label(type,id);await alerts.createMisc({userId:i.user.id,year,platform:pricePlatform,itemType:type,itemId:id,itemLabel,direction:direction as Direction,target,baseline:latest.price},(await benefits(alerts.pool,i.user.id)).alerts);await i.editReply(`🔔 Watching ${itemLabel} on ${pricePlatform.toUpperCase()} from ${coins(latest.price)} coins. You’ll get one DM when it reaches ${direction} ${coins(target)}.`);return;}
+  if(i.isModalSubmit()&&i.customId.startsWith('miscmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,type,id,direction,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))throw new Error('Choose a valid consumable.');const target=Number(i.fields.getTextInputValue('target')),latest=await prices.miscLatest(type,id,pricePlatform);if(!Number.isInteger(target)||target<1||target>15000000)throw new Error('Choose a valid target price.');if(!latest||latest.price===null||latest.price<=0||!isFresh(latest.last_checked_at??latest.captured_at,Math.max(30,maxAge)))throw new Error('No fresh listed price is available for this item.');const itemLabel=latest.display_name||miscCatalog.label(type,id);await alerts.createMisc({userId:i.user.id,year,platform:pricePlatform,itemType:type,itemId:id,itemLabel,direction:direction as Direction,target,baseline:latest.price},(await benefits(alerts.pool,i.user.id)).alerts);await i.editReply(`🔔 Watching ${itemLabel} on ${pricePlatform.toUpperCase()} from ${coins(latest.price)} coins. You’ll get one DM when it reaches ${direction} ${coins(target)}.`);return;}
   if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,id,direction,pricePlatform]=i.customId.split(':');await i.editReply({embeds:[await createAlert(i,id,direction==='above'?'above':'below',Number(i.fields.getTextInputValue('target')),pricePlatform)]});return;}
   if(!i.isChatInputCommand())return;
   await i.deferReply({flags:!['price','consumable','flip','fodder','movers','budget','compare'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
