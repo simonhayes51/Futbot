@@ -102,7 +102,7 @@ export class PriceRepository {
     });
   }
   async miscLatest(itemType:MiscItemType,itemId:string,platform:string):Promise<MiscMarketItem|null>{
-    if(!isMiscItemType(itemType)||!/^\\d+$/.test(itemId)||!['ps5','pc'].includes(platform))throw new Error('Choose a valid consumable and market.');
+    if(!isMiscItemType(itemType)||!/^\d+$/.test(itemId)||!['ps5','pc'].includes(platform))throw new Error('Choose a valid consumable and market.');
     return this.cached('misc-latest:'+platform+':'+itemType+':'+itemId,30000,async()=>{
       const {rows}=await this.pool.query(`SELECT item_type,item_id::text,price,status,captured_at,
         price_updated_at,last_checked_at
@@ -113,7 +113,7 @@ export class PriceRepository {
     });
   }
   async miscHistory(itemType:MiscItemType,itemId:string,platform:string,hours=24):Promise<{at:Date;value:number}[]>{
-    if(!isMiscItemType(itemType)||!/^\\d+$/.test(itemId)||!['ps5','pc'].includes(platform))throw new Error('Choose a valid consumable and market.');
+    if(!isMiscItemType(itemType)||!/^\d+$/.test(itemId)||!['ps5','pc'].includes(platform))throw new Error('Choose a valid consumable and market.');
     const span=Math.max(1,Math.min(hours,168));
     return this.cached('misc-history:'+platform+':'+itemType+':'+itemId+':'+span,120000,async()=>{
       const {rows}=await this.pool.query(`SELECT date_trunc('hour',captured_at) AS at,
