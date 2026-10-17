@@ -169,7 +169,7 @@ async function handle(i:Interaction){
       await miscCatalog.ready();
       const items=await prices.miscItems(pricePlatform);
       const query=String(q).trim().toLocaleLowerCase();
-      const choices=items.filter(item=>item.item_type===type&&(!query||item.item_id.includes(query)||(item.display_name||miscCatalog.label(type,item.item_id)).toLocaleLowerCase().includes(query))).slice(0,25).map(item=>{const checked=item.last_checked_at??item.captured_at,age=checked?Math.max(0,Math.floor((Date.now()-new Date(checked).getTime())/60000)):null,time=age===null?'':` · ${age<=1?'now':age+'m ago'}${age>Math.max(30,maxAge)?' ⚠ stale':''}`;return {name:`${item.display_name||miscCatalog.label(type,item.item_id)} · ${item.price===null?'No listings':coins(item.price)+' coins'}${time}`.slice(0,100),value:item.item_id};});
+      const choices=items.filter(item=>item.item_type===type&&(!query||item.item_id.includes(query)||(item.display_name||miscCatalog.label(type,item.item_id)).toLocaleLowerCase().includes(query))).slice(0,25).map(item=>({name:(item.display_name||miscCatalog.label(type,item.item_id)).slice(0,100),value:item.item_id}));
       await i.respond(choices);return;
     }
     if(q.length<2){await i.respond([]);return;}
