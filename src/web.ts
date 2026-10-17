@@ -73,7 +73,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
  if(path==='/api/consumables'&&method==='GET'){
   const platform=selectedMarket(url.searchParams.get('platform'),market.platform);
   let items;
-  try{items=(await prices.miscItems(platform)).map(item=>({...item,fresh:isFresh(item.captured_at,market.maxAge)}));}catch(error){if((error as any)?.code==='42P01')throw new HttpError(503,'Consumable prices are not connected yet. Deploy the TradeHQ misc-price feed first.');throw error;}
+  try{items=(await prices.miscItems(platform)).map(item=>({...item,fresh:isFresh(item.captured_at,Math.max(30,market.maxAge))}));}catch(error){if((error as any)?.code==='42P01')throw new HttpError(503,'Consumable prices are not connected yet. Deploy the TradeHQ misc-price feed first.');throw error;}
   const [saved,alertRows]=await Promise.all([
     alerts.pool.query(`SELECT item_type,item_id::text,starting_price,watched_at FROM futbot_misc_watchlist WHERE user_id=$1 AND game_year=$2 AND platform=$3`,[s.user_id,prices.year,platform]),
     alerts.pool.query(`SELECT id,item_type,item_id::text,item_label,direction,target_price,baseline_price,state,created_at,triggered_at FROM futbot_misc_alerts WHERE user_id=$1 AND game_year=$2 AND platform=$3 ORDER BY id DESC LIMIT 100`,[s.user_id,prices.year,platform])
@@ -101,7 +101,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
     await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[s.user_id]);
     const count=await c.query(`SELECT ((SELECT count(*) FROM futbot_watchlist WHERE user_id=$1 AND game_year=$2)+(SELECT count(*) FROM futbot_misc_watchlist WHERE user_id=$1 AND game_year=$2))::int AS n`,[s.user_id,prices.year]);
     if(Number(count.rows[0].n)>=access.watch)throw new HttpError(400,`Your saved watchlist limit is ${access.watch}. Remove an item or upgrade in Plans & billing.`);
-    const latest=await prices.miscLatest(itemType,itemId,platform),start=latest&&latest.price!==null&&isFresh(latest.captured_at,market.maxAge)?latest.price:null;
+    const latest=await prices.miscLatest(itemType,itemId,platform),start=latest&&latest.price!==null&&Number(latest.price)>0&&isFresh(latest.captured_at,Math.max(30,market.maxAge))?latest.price:null;
     await c.query(`INSERT INTO futbot_misc_watchlist(user_id,game_year,platform,item_type,item_id,starting_price) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,[s.user_id,prices.year,platform,itemType,itemId,start]);
     await c.query('COMMIT');
    }catch(error){await c.query('ROLLBACK');throw error;}finally{c.release();}
@@ -126,7 +126,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
    if(!isMiscItemType(itemType)||!/^\d+$/.test(itemId))throw new HttpError(400,'Choose a valid consumable.');
    if(!['below','above'].includes(direction))throw new HttpError(400,'Choose a valid alert direction.');
    const target=targetValue(b.target),latest=await prices.miscLatest(itemType,itemId,platform);
-   if(!latest||latest.price===null||!isFresh(latest.captured_at,market.maxAge))throw new HttpError(409,'There is no fresh listed price for this item yet.');
+   if(!latest||latest.price===null||latest.price<=0||!isFresh(latest.captured_at,Math.max(30,market.maxAge)))throw new HttpError(409,'There is no fresh listed price for this item yet.');
    const access=await benefits(alerts.pool,s.user_id);
    try{await alerts.createMisc({userId:s.user_id,year:prices.year,platform,itemType,itemId,itemLabel:miscItemLabel(itemType,itemId),direction,target,baseline:latest.price},access.alerts);}
    catch(error){throw new HttpError(400,error instanceof Error?error.message:'Could not create alert.');}
