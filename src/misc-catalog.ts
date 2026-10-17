@@ -55,7 +55,7 @@ export class MiscCatalog {
   }
   async refresh(): Promise<number> {
     if (this.refreshing) return this.refreshing;
-    this.refreshing=(async()=>{
+    const task=(async()=>{
       await this.load();
       const rows:Array<{type:CatalogItemType;id:string;name:string;source:string}>=[];
       for (const [id,name] of Object.entries(CHEMISTRY_STYLES)) rows.push({type:'chemistry_style',id,name,source:'ea-chemistry-style-resource-ids'});
@@ -85,6 +85,7 @@ export class MiscCatalog {
       for(const row of rows)this.names.set(row.type+':'+row.id,row.name);
       return managers.size;
     })().finally(()=>{this.refreshing=undefined;});
-    return this.refreshing;
+    this.refreshing=task;
+    return task;
   }
 }
