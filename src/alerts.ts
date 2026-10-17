@@ -106,7 +106,7 @@ export async function miscAlertTick(repo:AlertRepository,prices:PriceRepository,
       try{
         if(!cache.has(key))cache.set(key,await prices.miscLatest(alert.item_type,alert.item_id,alert.platform));
         const item=cache.get(key);
-        if(!item||item.price===null||!isFresh(item.captured_at,maxAge))continue;
+        if(!item||item.price===null||item.price<=0||!isFresh(item.captured_at,Math.max(30,maxAge)))continue;
         const target=Number(alert.target_price);
         const reached=alert.direction==='below'?item.price<=target:item.price>=target;
         if(!reached)continue;
