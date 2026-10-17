@@ -4,7 +4,7 @@ Ultimate Team Discord tools, an editorial marketing website and a live Discord-a
 
 ## What is implemented
 
-22 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`, `/flip`, `/consumable`, `/consumables`.
+23 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`, `/flip`, `/consumable`, `/consumables`.
 
 - Player artwork, current BIN, freshness, 24-hour/7-day hourly-median graphs, period median lows/highs and after-tax value. Buy/sell alert, watchlist and chart buttons.
 - Fodder boards: cheapest fresh-priced card at each rating (83–91 by default), PNG rating ladder; an optional exact rating shows up to three alternatives.
