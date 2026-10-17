@@ -11,7 +11,7 @@ export async function feedPermission(feed:Feed){
  const [guild,roles,channel,bot]=await Promise.all([discord('/guilds/'+feed.guild_id,token),discord(`/guilds/${feed.guild_id}/roles`,token),discord('/channels/'+feed.channel_id,token),discord('/users/@me',token)]);
  if(channel.guild_id!==feed.guild_id||![0,5].includes(channel.type))return false;
  const member=await discord(`/guilds/${feed.guild_id}/members/${bot.id}`,token);
- return channelPermissions(guild,roles,member,channel,feed.kind==='fodder')&&(!feed.role_id||roles.some((r:any)=>r.id===feed.role_id&&r.mentionable));
+ return channelPermissions(guild,roles,member,channel,(feed.kind==='fodder'||feed.kind==='consumables'))&&(!feed.role_id||roles.some((r:any)=>r.id===feed.role_id&&r.mentionable));
 }
 type Context={pool:pg.Pool;market:MarketService;billing:Billing;user:string;path:string;method:string;read:()=>Promise<any>;admin:(id:string)=>Promise<any>;memberGuilds:()=>Promise<any[]>;audit:(id:string,action:string,details?:unknown)=>Promise<void>};
 export async function communityRoute(ctx:Context):Promise<any|undefined>{
