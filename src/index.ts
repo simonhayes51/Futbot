@@ -106,10 +106,13 @@ async function saveMiscWatch(userId:string,itemType:MiscItemType,itemId:string,p
   const access=await benefits(alerts.pool,userId),c=await alerts.pool.connect();
   try{
     await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[userId]);
-    const count=await c.query(`SELECT ((SELECT count(*) FROM futbot_watchlist WHERE user_id=$1 AND game_year=$2)+(SELECT count(*) FROM futbot_misc_watchlist WHERE user_id=$1 AND game_year=$2))::int AS n`,[userId,year]);
-    if(Number(count.rows[0].n)>=access.watch)throw new Error(`Your saved watchlist limit is ${access.watch}.`);
-    const latest=await prices.miscLatest(itemType,itemId,pricePlatform),start=latest&&latest.price!==null&&latest.price>0&&isFresh(latest.captured_at,Math.max(30,maxAge))?latest.price:null;
-    await c.query(`INSERT INTO futbot_misc_watchlist(user_id,game_year,platform,item_type,item_id,starting_price) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,[userId,year,pricePlatform,itemType,itemId,start]);
+    const exists=await c.query(`SELECT 1 FROM futbot_misc_watchlist WHERE user_id=$1 AND game_year=$2 AND platform=$3 AND item_type=$4 AND item_id=$5`,[userId,year,pricePlatform,itemType,itemId]);
+    if(!exists.rowCount){
+      const count=await c.query(`SELECT ((SELECT count(*) FROM futbot_watchlist WHERE user_id=$1)+(SELECT count(*) FROM futbot_misc_watchlist WHERE user_id=$1))::int AS n`,[userId]);
+      if(Number(count.rows[0].n)>=access.watch)throw new Error(`Your saved watchlist limit is ${access.watch}.`);
+      const latest=await prices.miscLatest(itemType,itemId,pricePlatform),start=latest&&latest.price!==null&&latest.price>0&&isFresh(latest.captured_at,Math.max(30,maxAge))?latest.price:null;
+      await c.query(`INSERT INTO futbot_misc_watchlist(user_id,game_year,platform,item_type,item_id,starting_price) VALUES($1,$2,$3,$4,$5,$6)`,[userId,year,pricePlatform,itemType,itemId,start]);
+    }
     await c.query('COMMIT');
   }catch(error){await c.query('ROLLBACK');throw error;}finally{c.release();}
 }
