@@ -4,11 +4,11 @@ Ultimate Team Discord tools, an editorial marketing website and a live Discord-a
 
 ## What is implemented
 
-22 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`, `/flip`, `/consumable`.
+22 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`, `/flip`, `/consumable`, `/consumables`.
 
 - Player artwork, current BIN, freshness, 24-hour/7-day hourly-median graphs, period median lows/highs and after-tax value. Buy/sell alert, watchlist and chart buttons.
 - Fodder boards: cheapest fresh-priced card at each rating (83–91 by default), PNG rating ladder; an optional exact rating shows up to three alternatives.
-- Consumables market: managers, manager leagues and chemistry styles for PC and console; category search, 24-hour movement, interactive seven-day charts, saved-price watchlists and private threshold DMs. Requires the TradeHQ misc-price feed and migration 103 in the shared price database.
+- Consumables market: managers, manager leagues and chemistry styles for PC and console; category search, individual price checks, 24-hour movement, `/consumables` market boards with rise/fall rankings, a select-to-open detail menu, interactive seven-day charts, saved-price watchlists and private threshold DMs. Requires the TradeHQ misc-price feed and migration 103 in the shared price database.
 - Movers: top ten risers/fallers against the median of at least three observations 24–25 hours ago. Missing baselines are excluded.
 - Budget finder and two-card price comparison.
 - `/flip` lets traders post a selected PS5/Xbox or PC market call with entry/target, trader-rated risk, card artwork, current price and chart; readers can save the same market to a watchlist or create a matching alert.
