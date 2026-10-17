@@ -67,7 +67,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
  if(path==='/api/fodder-alerts'){
   const platform=selectedMarket(url.searchParams.get('platform'),market.platform);
   if(method==='GET'){const rows=(await alerts.pool.query('SELECT id,rating,platform,baseline_price,drop_percent,target_price,state,created_at,triggered_at FROM futbot_fodder_alerts WHERE user_id=$1 AND game_year=$2 AND platform=$3 ORDER BY id DESC',[s.user_id,prices.year,platform])).rows;const current=await Promise.all([...new Set(rows.map(r=>Number(r.rating)))].map(async rating=>({rating,index:await prices.fodderIndex(platform,rating,market.maxAge)})));json(res,200,{alerts:rows,current});return;}
-  const b=await body(req);if(method==='POST'){const rating=ratingValue(b.rating),drop=Number(b.dropPercent);if(!Number.isFinite(drop)||drop<1||drop>50)throw new HttpError(400,'Choose a drop between 1% and 50%.');const chosen=selectedMarket(b.platform,market.platform),source=marketFor(chosen),cards=await source.snapshot(),baseline=fodderIndex(cards,rating);if(!baseline)throw new HttpError(409,'There are not three fresh, tradeable cards at this rating yet.');const access=await benefits(alerts.pool,s.user_id),target=Math.max(1,Math.floor(baseline*(1-drop/100))),c=await alerts.pool.connect();try{await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[s.user_id]);const count=await c.query("SELECT (SELECT count(*) FROM futbot_alerts WHERE user_id=$1 AND state IN ('active','queued','paused'))+(SELECT count(*) FROM futbot_fodder_alerts WHERE user_id=$1 AND state IN ('active','queued')) AS n",[s.user_id]);if(Number(count.rows[0].n)>=access.alerts)throw new HttpError(400,`Your saved alert limit is ${access.alerts}. Remove an existing alert or upgrade in Plans & billing.`);await c.query('INSERT INTO futbot_fodder_alerts(user_id,game_year,platform,rating,baseline_price,drop_percent,target_price) VALUES($1,$2,$3,$4,$5,$6,$7)',[s.user_id,prices.year,chosen,rating,baseline,drop,target]);await c.query('COMMIT');}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}json(res,200,{ok:true});return;}
+  const b=await body(req);if(method==='POST'){const rating=ratingValue(b.rating),drop=Number(b.dropPercent);if(!Number.isFinite(drop)||drop<1||drop>50)throw new HttpError(400,'Choose a drop between 1% and 50%.');const chosen=selectedMarket(b.platform,market.platform),source=marketFor(chosen),cards=await source.snapshot(),baseline=fodderIndex(cards,rating);if(!baseline)throw new HttpError(409,'There are not three fresh, tradeable cards at this rating yet.');const access=await benefits(alerts.pool,s.user_id),target=Math.max(1,Math.floor(baseline*(1-drop/100))),c=await alerts.pool.connect();try{await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[s.user_id]);const count=await c.query("SELECT (SELECT count(*) FROM futbot_alerts WHERE user_id=$1 AND state IN ('active','queued','paused'))+(SELECT count(*) FROM futbot_fodder_alerts WHERE user_id=$1 AND state IN ('active','queued'))+(SELECT count(*) FROM futbot_misc_alerts WHERE user_id=$1 AND state IN ('active','queued')) AS n",[s.user_id]);if(Number(count.rows[0].n)>=access.alerts)throw new HttpError(400,`Your saved alert limit is ${access.alerts}. Remove an existing alert or upgrade in Plans & billing.`);await c.query('INSERT INTO futbot_fodder_alerts(user_id,game_year,platform,rating,baseline_price,drop_percent,target_price) VALUES($1,$2,$3,$4,$5,$6,$7)',[s.user_id,prices.year,chosen,rating,baseline,drop,target]);await c.query('COMMIT');}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}json(res,200,{ok:true});return;}
   if(method==='DELETE'){if(!/^\d+$/.test(String(b.id)))throw new HttpError(400,'Invalid fodder alert.');const deleted=await alerts.pool.query("UPDATE futbot_fodder_alerts SET state='cancelled' WHERE id=$1 AND user_id=$2 AND state IN ('active','failed') RETURNING id",[b.id,s.user_id]);if(!deleted.rowCount)throw new HttpError(409,'This fodder alert cannot be cancelled.');json(res,200,{ok:true});return;}throw new HttpError(405,'Method not supported');
  }
  if(path==='/api/consumables'&&method==='GET'){
@@ -86,7 +86,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
  if(path==='/api/consumable-history'&&method==='GET'){
   const platform=selectedMarket(url.searchParams.get('platform'),market.platform);
   const itemType=url.searchParams.get('type')??'',itemId=url.searchParams.get('id')??'';
-  if(!isMiscItemType(itemType)||!/^\\d+$/.test(itemId))throw new HttpError(400,'Choose a valid consumable.');
+  if(!isMiscItemType(itemType)||!/^\d+$/.test(itemId))throw new HttpError(400,'Choose a valid consumable.');
   const hours=url.searchParams.get('hours')==='24'?24:168;
   const [item,history]=await Promise.all([prices.miscLatest(itemType,itemId,platform),prices.miscHistory(itemType,itemId,platform,hours)]);
   json(res,200,{platform,item,history,hours});return;
@@ -95,7 +95,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
   const b=method==='GET'?{}:await body(req);
   const itemType=String(b.itemType??''),itemId=String(b.itemId??''),platform=selectedMarket(b.platform,market.platform);
   if(method==='POST'){
-   if(!isMiscItemType(itemType)||!/^\\d+$/.test(itemId))throw new HttpError(400,'Choose a valid consumable.');
+   if(!isMiscItemType(itemType)||!/^\d+$/.test(itemId))throw new HttpError(400,'Choose a valid consumable.');
    const access=await benefits(alerts.pool,s.user_id),c=await alerts.pool.connect();
    try{
     await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[s.user_id]);
@@ -108,7 +108,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
    json(res,200,{ok:true});return;
   }
   if(method==='DELETE'){
-   if(!isMiscItemType(itemType)||!/^\\d+$/.test(itemId))throw new HttpError(400,'Choose a valid consumable.');
+   if(!isMiscItemType(itemType)||!/^\d+$/.test(itemId))throw new HttpError(400,'Choose a valid consumable.');
    await alerts.pool.query(`DELETE FROM futbot_misc_watchlist WHERE user_id=$1 AND game_year=$2 AND platform=$3 AND item_type=$4 AND item_id=$5`,[s.user_id,prices.year,platform,itemType,itemId]);json(res,200,{ok:true});return;
   }
   throw new HttpError(405,'Method not supported');
@@ -123,7 +123,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
   const b=await body(req);
   if(method==='POST'){
    const itemType=String(b.itemType??''),itemId=String(b.itemId??''),platform=selectedMarket(b.platform,market.platform),direction=b.direction;
-   if(!isMiscItemType(itemType)||!/^\\d+$/.test(itemId))throw new HttpError(400,'Choose a valid consumable.');
+   if(!isMiscItemType(itemType)||!/^\d+$/.test(itemId))throw new HttpError(400,'Choose a valid consumable.');
    if(!['below','above'].includes(direction))throw new HttpError(400,'Choose a valid alert direction.');
    const target=targetValue(b.target),latest=await prices.miscLatest(itemType,itemId,platform);
    if(!latest||latest.price===null||!isFresh(latest.captured_at,market.maxAge))throw new HttpError(409,'There is no fresh listed price for this item yet.');
@@ -133,7 +133,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
    json(res,200,{ok:true});return;
   }
   if(method==='DELETE'){
-   const id=String(b.id??'');if(!/^\\d+$/.test(id))throw new HttpError(400,'Invalid consumable alert.');
+   const id=String(b.id??'');if(!/^\d+$/.test(id))throw new HttpError(400,'Invalid consumable alert.');
    const deleted=await alerts.pool.query(`UPDATE futbot_misc_alerts SET state='cancelled' WHERE id=$1 AND user_id=$2 AND state IN ('active','failed') RETURNING id`,[id,s.user_id]);
    if(!deleted.rowCount)throw new HttpError(409,'This consumable alert cannot be cancelled.');json(res,200,{ok:true});return;
   }
