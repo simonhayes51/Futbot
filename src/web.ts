@@ -74,10 +74,13 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
   const platform=selectedMarket(url.searchParams.get('platform'),market.platform);
   let items;
   try{items=(await prices.miscItems(platform)).map(item=>({...item,fresh:isFresh(item.captured_at,Math.max(30,market.maxAge))}));}catch(error){if((error as any)?.code==='42P01')throw new HttpError(503,'Consumable prices are not connected yet. Deploy the TradeHQ misc-price feed first.');throw error;}
-  const [saved,alertRows]=await Promise.all([
+  const [saved,alertRows,catalogRows]=await Promise.all([
     alerts.pool.query(`SELECT item_type,item_id::text,starting_price,watched_at FROM futbot_misc_watchlist WHERE user_id=$1 AND game_year=$2 AND platform=$3`,[s.user_id,prices.year,platform]),
-    alerts.pool.query(`SELECT id,item_type,item_id::text,item_label,direction,target_price,baseline_price,state,created_at,triggered_at FROM futbot_misc_alerts WHERE user_id=$1 AND game_year=$2 AND platform=$3 ORDER BY id DESC LIMIT 100`,[s.user_id,prices.year,platform])
+    alerts.pool.query(`SELECT id,item_type,item_id::text,item_label,direction,target_price,baseline_price,state,created_at,triggered_at FROM futbot_misc_alerts WHERE user_id=$1 AND game_year=$2 AND platform=$3 ORDER BY id DESC LIMIT 100`,[s.user_id,prices.year,platform]),
+    alerts.pool.query(`SELECT item_type,item_id::text,display_name FROM futbot_misc_item_catalog WHERE game_year=$1`,[prices.year])
   ]);
+  const catalogNames=new Map(catalogRows.rows.map(row=>[`${row.item_type}:${row.item_id}`,row.display_name]));
+  items=items.map(item=>({...item,display_name:item.display_name||catalogNames.get(`${item.item_type}:${item.item_id}`)||null}));
   const byKey=new Map(items.map(i=>[`${i.item_type}:${i.item_id}`,i]));
   const watchlist=saved.rows.map(w=>({...w,current:byKey.get(`${w.item_type}:${w.item_id}`)??null}));
   const alertsWithCurrent=alertRows.rows.map(a=>({...a,current:byKey.get(`${a.item_type}:${a.item_id}`)??null}));
