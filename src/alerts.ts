@@ -11,7 +11,7 @@ export class AlertRepository {
   async create(input:{userId:string;guildId:string|null;cardId:string;cardName:string;year:number;platform:string;direction:Direction;target:number},limit=5){
     const c=await this.pool.connect();
     try{await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[input.userId]);
-      const count=await c.query(`SELECT ((SELECT count(*) FROM futbot_alerts WHERE user_id=$1 AND state IN ('active','queued','paused'))+(SELECT count(*) FROM futbot_fodder_alerts WHERE user_id=$1 AND state IN ('active','queued')))::int AS n`,[input.userId]);
+      const count=await c.query(`SELECT ((SELECT count(*) FROM futbot_alerts WHERE user_id=$1 AND state IN ('active','queued','paused'))+(SELECT count(*) FROM futbot_fodder_alerts WHERE user_id=$1 AND state IN ('active','queued'))+(SELECT count(*) FROM futbot_misc_alerts WHERE user_id=$1 AND state IN ('active','queued')))::int AS n`,[input.userId]);
       if(count.rows[0].n>=limit)throw new Error(`You have reached your limit of ${limit} saved alerts.`);
       const {rows}=await c.query<Alert>(`INSERT INTO futbot_alerts(user_id,guild_id,card_id,card_name,game_year,platform,direction,target) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,[input.userId,input.guildId,input.cardId,input.cardName,input.year,input.platform,input.direction,input.target]);
       await c.query('COMMIT');return rows[0];
