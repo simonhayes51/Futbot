@@ -18,7 +18,8 @@ function decodeHtml(value: string): string {
 }
 function attr(attrs:string,key:string):string {
   const escaped=key.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  return attrs.match(new RegExp('\\b'+escaped+'\\s*=\\s*["\\']([^"\\']*)["\\']','i'))?.[1]||'';
+  const match=attrs.match(new RegExp("\\b"+escaped+"\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')","i"));
+  return match?.[1] ?? match?.[2] ?? '';
 }
 function cleanName(value:string):string {
   return decodeHtml(value)
@@ -34,9 +35,9 @@ function usableName(name:string):boolean {
   return !!name && name.length<80 && /\p{L}/u.test(name) && !/^(manager|image|nation|league|gold|silver|bronze|m)$/i.test(name);
 }
 
-/** Parse both FUT.GG manager-card artwork and FUTNext profile links.
+/** Parse FUT.GG manager-card artwork and profile links.
  * FUT.GG image URLs contain the exact manager item ID used by the price feed,
- * and their alt text carries the full display name.
+ * and their alt text carries the display name.
  */
 export function parseManagers(html: string): Array<{ id:string; name:string }> {
   const found=new Map<string,string>();
@@ -49,7 +50,7 @@ export function parseManagers(html: string): Array<{ id:string; name:string }> {
   };
   for(const match of html.matchAll(/<(?:img|source)\b([^>]*)>/gi)){
     const attrs=match[1];
-    const source=[attr(attrs,'src'),attr(attrs,'data-src'),attr(attrs,'srcset')].join(' ');
+    const source=[attr(attrs,'src'),attr(attrs,'data-src'),attr(attrs,'data-original'),attr(attrs,'srcset')].join(' ');
     const id=source.match(/\/27\/managers\/portrait\/(\d+)(?:[./?\s]|$)/i)?.[1];
     if(id)add(id,[attr(attrs,'alt'),attr(attrs,'aria-label'),attr(attrs,'title')]);
   }
@@ -106,10 +107,7 @@ export class MiscCatalog {
       }
       const managers=new Map<string,string>();
       for(const page of pages)for(const manager of page)managers.set(manager.id,manager.name);
-      if(managers.size<100){
-        // Keep the previous catalogue if FUT.GG changes its page markup or is unavailable.
-        throw new Error('FUT.GG manager catalogue was incomplete ('+managers.size+' names); keeping saved names.');
-      }
+      if(managers.size<100)throw new Error('FUT.GG manager catalogue was incomplete ('+managers.size+' names); keeping saved names.');
       for(const [id,name] of managers)rows.push({type:'manager',id,name,source:'futgg-manager-catalog'});
       const ids=rows.map(r=>r.id),types=rows.map(r=>r.type),names=rows.map(r=>r.name),sources=rows.map(r=>r.source);
       await this.pool.query(
