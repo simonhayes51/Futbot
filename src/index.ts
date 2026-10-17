@@ -11,8 +11,8 @@ import type {Server} from 'node:http';
 import {extraCommands,handleTool} from './tools.js';
 import {guildSettings,defaultBrand,watch,type GuildSettings} from './settings.js';
 import { Client, MessageFlags, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, type Interaction } from 'discord.js';
-import { PriceRepository } from './prices.js';
-import { AlertRepository,alertTick,fodderAlertTick,type Alert } from './alerts.js';
+import { PriceRepository,isMiscItemType,miscItemLabel,type MiscItemType } from './prices.js';
+import { AlertRepository,alertTick,fodderAlertTick,miscAlertTick,type Alert } from './alerts.js';
 import { coins,isFresh,tradeProfit,type Direction,type Card } from './domain.js';
 import { marketChart } from './chart.js';
 import {tradeReceipt} from './boards.js';
@@ -32,6 +32,10 @@ const brand=(pricePlatform=platform)=>{const b=context.getStore()??defaultBrand;
 const playerOption=(o:any)=>o.setName('player').setDescription('Search a player and choose the exact card').setRequired(true).setAutocomplete(true);
 const commands=[...extraCommands,
   new SlashCommandBuilder().setName('price').setDescription('Check a card price with artwork and market history').addStringOption(playerOption).addStringOption(o=>o.setName('platform').setDescription('Market for this price lookup').addChoices({name:'PS5 / Xbox · Console',value:'ps5'},{name:'PC',value:'pc'})),
+  new SlashCommandBuilder().setName('consumable').setDescription('Check a manager or consumable price and chart')
+    .addStringOption(o=>o.setName('type').setDescription('Consumable category').setRequired(true).addChoices({name:'Manager',value:'manager'},{name:'Manager league',value:'manager_league'},{name:'Chemistry style',value:'chemistry_style'}))
+    .addStringOption(o=>o.setName('item').setDescription('Choose a feed item by its source ID').setRequired(true).setAutocomplete(true))
+    .addStringOption(o=>o.setName('platform').setDescription('Market for this lookup').addChoices({name:'PS5 / Xbox · Console',value:'ps5'},{name:'PC',value:'pc'})),
   new SlashCommandBuilder().setName('flip').setDescription('Post a player flip with live market context and member actions')
     .addStringOption(playerOption)
     .addStringOption(o=>o.setName('platform').setDescription('Market for this flip').setRequired(true).addChoices({name:'PS5 / Xbox · Console',value:'ps5'},{name:'PC',value:'pc'}))
@@ -76,6 +80,39 @@ async function showPrice(card:Card,hours=24,pricePlatform=platform){
   const row=new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`newalert:${card.id}:${pricePlatform}`).setLabel('Buy alert').setEmoji('🔔').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`history:${card.id}:${hours===24?168:24}:${pricePlatform}`).setLabel(hours===24?'7-day chart':'24-hour chart').setEmoji('📊').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`abovealert:${card.id}:${pricePlatform}`).setLabel('Sell alert').setEmoji('📈').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`watch:${card.id}:${pricePlatform}`).setLabel('Watch').setEmoji('⭐').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`history:${card.id}:${hours}:${pricePlatform}`).setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary));
   return {embeds:[embed],files,components:[row]};
 }
+async function showMiscPrice(itemType:MiscItemType,itemId:string,range=24,pricePlatform=platform){
+  const [item,history]=await Promise.all([prices.miscLatest(itemType,itemId,pricePlatform),prices.miscHistory(itemType,itemId,pricePlatform,range)]);
+  const label=miscItemLabel(itemType,itemId),embed=brand(pricePlatform).setTitle(`🧴 ${label}`).setDescription(`FC${year} ${itemType.replaceAll('_',' ')} · source item #${itemId}`);
+  if(!item){embed.addFields({name:'Market status',value:'No price observation has been captured for this item yet.'});return {embeds:[embed],files:[],components:[]};}
+  const fresh=item.price!==null&&isFresh(item.captured_at,maxAge),period=range===168?'7-day':'24-hour',files:AttachmentBuilder[]=[];
+  if(item.price===null){embed.addFields({name:'CURRENT MARKET',value:`No active listing · ${String(item.status).replaceAll('_',' ')}`,inline:true});}
+  else{
+    embed.addFields({name:'CURRENT PRICE',value:`**${coins(item.price)} coins**`,inline:true},{name:'PRICE UPDATED',value:`<t:${Math.floor(new Date(item.captured_at).getTime()/1000)}:R>${fresh?'':' · ⚠ STALE'}`,inline:true});
+    if(history.length>1){const change=(item.price-history[0].value)/history[0].value*100;embed.addFields({name:`${period.toUpperCase()} CHANGE`,value:`${change>=0?'+':''}${change.toFixed(1)}%`,inline:true});}
+    if(history.length){const values=history.map(p=>p.value);embed.addFields({name:`${period.toUpperCase()} LOW`,value:coins(Math.min(...values))+' coins',inline:true},{name:`${period.toUpperCase()} HIGH`,value:coins(Math.max(...values))+' coins',inline:true},{name:'AFTER 5% TAX',value:coins(Math.floor(item.price*.95))+' coins',inline:true});}
+  }
+  embed.setFooter({text:`${context.getStore()?.footer??defaultBrand.footer} • FC${year} • ${pricePlatform.toUpperCase()} • Observed price`}).setTimestamp(item.captured_at);
+  if(history.length>1){const png=await marketChart(`${label} / ${period} history`,history);if(png){files.push(new AttachmentBuilder(png,{name:'consumable-market.png'}));embed.setImage('attachment://consumable-market.png');}}
+  const row=new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`miscalert:${itemType}:${itemId}:below:${pricePlatform}`).setLabel('Alert below').setEmoji('🔔').setStyle(ButtonStyle.Primary).setDisabled(!fresh||item.price===null),
+    new ButtonBuilder().setCustomId(`miscalert:${itemType}:${itemId}:above:${pricePlatform}`).setLabel('Alert above').setEmoji('📈').setStyle(ButtonStyle.Secondary).setDisabled(!fresh||item.price===null),
+    new ButtonBuilder().setCustomId(`mischistory:${itemType}:${itemId}:${range===24?168:24}:${pricePlatform}`).setLabel(range===24?'7-day chart':'24-hour chart').setEmoji('📊').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`miscwatch:${itemType}:${itemId}:${pricePlatform}`).setLabel('Watch').setEmoji('⭐').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`mischistory:${itemType}:${itemId}:${range}:${pricePlatform}`).setLabel('Refresh').setEmoji('🔄').setStyle(ButtonStyle.Secondary)
+  );
+  return {embeds:[embed],files,components:[row]};
+}
+async function saveMiscWatch(userId:string,itemType:MiscItemType,itemId:string,pricePlatform:string){
+  const access=await benefits(alerts.pool,userId),c=await alerts.pool.connect();
+  try{
+    await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(hashtext($1))',[userId]);
+    const count=await c.query(`SELECT ((SELECT count(*) FROM futbot_watchlist WHERE user_id=$1 AND game_year=$2)+(SELECT count(*) FROM futbot_misc_watchlist WHERE user_id=$1 AND game_year=$2))::int AS n`,[userId,year]);
+    if(Number(count.rows[0].n)>=access.watch)throw new Error(`Your saved watchlist limit is ${access.watch}.`);
+    const latest=await prices.miscLatest(itemType,itemId,pricePlatform),start=latest?.price!==null&&latest&&isFresh(latest.captured_at,maxAge)?latest.price:null;
+    await c.query(`INSERT INTO futbot_misc_watchlist(user_id,game_year,platform,item_type,item_id,starting_price) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`,[userId,year,pricePlatform,itemType,itemId,start]);
+    await c.query('COMMIT');
+  }catch(error){await c.query('ROLLBACK');throw error;}finally{c.release();}
+}
 async function createAlert(i:any,value:string,direction:Direction,target:number,pricePlatform=platform){
   if(!Number.isInteger(target)||target<1||target>15000000)throw new Error('Enter a whole coin amount between 1 and 15,000,000.');
   const card=await resolveCard(value);
@@ -119,11 +156,22 @@ async function showAlerts(user:string,page=0){
 }
 async function handle(i:Interaction){
   if(i.isAutocomplete()){
-    const q=i.options.getFocused();if(q.length<2){await i.respond([]);return;}
+    const q=i.options.getFocused();
+    if(i.commandName==='consumable'){
+      const type=i.options.getString('type')??'',pricePlatform=i.options.getString('platform')??platform;
+      if(!isMiscItemType(type)){await i.respond([]);return;}
+      const items=await prices.miscItems(pricePlatform);
+      const choices=items.filter(item=>item.item_type===type&&(!q||item.item_id.includes(q))).slice(0,25).map(item=>({name:`${miscItemLabel(type,item.item_id)} · ${item.price===null?'No listings':coins(item.price)+' coins'}`.slice(0,100),value:item.item_id}));
+      await i.respond(choices);return;
+    }
+    if(q.length<2){await i.respond([]);return;}
     const cards=await prices.search(q);await i.respond(cards.map(c=>({name:`${c.name} · ${c.rating??'?'} ${c.position??''} · ${c.rarity??''}`.slice(0,100),value:c.id})));return;
   }
   if(i.isStringSelectMenu()&&i.customId==='feedcard'){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showPrice(await resolveCard(i.values[0])));return;}
   if(i.isButton()){
+    if(i.customId.startsWith('miscalert:')){const [,type,id,direction,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))return;const modal=new ModalBuilder().setCustomId(`miscmodal:${type}:${id}:${direction}:${pricePlatform}`).setTitle('Set consumable price target');modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId('target').setLabel(direction==='below'?'Notify at or below (coins)':'Notify at or above (coins)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8)));await i.showModal(modal);return;}
+    if(i.customId.startsWith('mischistory:')){const [,type,id,range,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))return;await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showMiscPrice(type,id,Number(range)===168?168:24,pricePlatform));return;}
+    if(i.customId.startsWith('miscwatch:')){const [,type,id,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))return;await i.deferReply({flags:MessageFlags.Ephemeral});await saveMiscWatch(i.user.id,type,id,pricePlatform);await i.editReply(`⭐ ${miscItemLabel(type,id)} saved to your ${pricePlatform.toUpperCase()} consumables watchlist. Open /dashboard to track it.`);return;}
     if(i.customId.startsWith('alertpage:')){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showAlerts(i.user.id,Number(i.customId.split(':')[1])));return;}
     if(i.customId.startsWith('editalert:')){const id=i.customId.split(':')[1],a=(await alerts.list(i.user.id)).find(a=>a.id===id);if(!a||!['active','paused'].includes(a.state))throw new Error('This alert can no longer be edited.');const modal=new ModalBuilder().setCustomId(`edittarget:${id}`).setTitle('Edit your price target');modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId('target').setLabel('New target price in coins').setValue(String(a.target)).setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8)));await i.showModal(modal);return;}
     if(i.customId.startsWith('removealert:')||i.customId.startsWith('alertstate:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [action,id,state]=i.customId.split(':');if(action==='removealert'){if(!await alerts.remove(i.user.id,id))throw new Error('This alert cannot be cancelled.');}else{if(!['active','paused'].includes(state))return;const r=await alerts.pool.query('UPDATE futbot_alerts SET state=$1 WHERE id=$2 AND user_id=$3 AND state=$4 RETURNING id',[state,id,i.user.id,state==='active'?'paused':'active']);if(!r.rowCount)throw new Error('This alert has changed. Run /myalerts again.');}await i.editReply(await showAlerts(i.user.id));return;}
@@ -139,11 +187,13 @@ async function handle(i:Interaction){
     if(action==='history'){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showPrice(await resolveCard(id),arg==='168'?168:24,actionPlatform));return;}
   }
   if(i.isModalSubmit()&&i.customId.startsWith('edittarget:')){await i.deferReply({flags:MessageFlags.Ephemeral});const id=i.customId.split(':')[1],a=(await alerts.list(i.user.id)).find(a=>a.id===id);if(!a)throw new Error('Alert not found.');await alerts.edit(i.user.id,id,Number(i.fields.getTextInputValue('target')),a.direction);await i.editReply(await showAlerts(i.user.id));return;}
+  if(i.isModalSubmit()&&i.customId.startsWith('miscmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,type,id,direction,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))throw new Error('Choose a valid consumable.');const target=Number(i.fields.getTextInputValue('target')),latest=await prices.miscLatest(type,id,pricePlatform);if(!Number.isInteger(target)||target<1||target>15000000)throw new Error('Choose a valid target price.');if(!latest||latest.price===null||!isFresh(latest.captured_at,maxAge))throw new Error('No fresh listed price is available for this item.');await alerts.createMisc({userId:i.user.id,year,platform:pricePlatform,itemType:type,itemId:id,itemLabel:miscItemLabel(type,id),direction:direction as Direction,target,baseline:latest.price},(await benefits(alerts.pool,i.user.id)).alerts);await i.editReply(`🔔 Watching ${miscItemLabel(type,id)} on ${pricePlatform.toUpperCase()} from ${coins(latest.price)} coins. You’ll get one DM when it reaches ${direction} ${coins(target)}.`);return;}
   if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,id,direction,pricePlatform]=i.customId.split(':');await i.editReply({embeds:[await createAlert(i,id,direction==='above'?'above':'below',Number(i.fields.getTextInputValue('target')),pricePlatform)]});return;}
   if(!i.isChatInputCommand())return;
   await i.deferReply({flags:!['price','flip','fodder','movers','budget','compare'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
   if(extraCommands.some(c=>c.name===i.commandName)){await handleTool(i,market,alerts,brand,resolveCard,await benefits(alerts.pool,i.user.id));return;}
   if(i.commandName==='testdm'){try{await i.user.send({embeds:[brand().setTitle('NOTIFICATIONS / CONNECTED').setDescription('FutBot can reach your DMs. Price alerts will arrive here when a fresh observed price meets your target.')]});await i.editReply('Test notification sent. Check your DMs.');}catch{await i.editReply('I could not send you a DM. Enable direct messages from this server, check that FutBot is not blocked, then run /testdm again.');}}
+  if(i.commandName==='consumable'){const type=i.options.getString('type',true) as MiscItemType,itemId=i.options.getString('item',true),pricePlatform=i.options.getString('platform')??platform;await i.editReply(await showMiscPrice(type,itemId,24,pricePlatform));}
   if(i.commandName==='price')await i.editReply(await showPrice(await resolveCard(i.options.getString('player',true)),24,i.options.getString('platform')??platform));
   if(i.commandName==='flip')await i.editReply(await createFlipPost(i,await resolveCard(i.options.getString('player',true)),i.options.getString('platform',true)));
   if(i.commandName==='alert')await i.editReply({embeds:[await createAlert(i,i.options.getString('player',true),i.options.getString('direction',true) as Direction,i.options.getInteger('target',true))]});
@@ -168,7 +218,7 @@ async function startBot(){
   console.log(`FutBot ready · FC${year} · ${platform} · ${commands.length} commands`);
   const tick=async()=>{if(busy)return;busy=true;try{await alertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{
     const user=await client.users.fetch(userId);const card=await prices.card(a.card_id).catch(()=>null);const b=await guildSettings(alerts.pool,(a as any).guild_id);await context.run(b,()=>user.send({nonce:`fb${a.id}`,enforceNonce:true,components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`history:${a.card_id}:24:${a.platform}`).setLabel('View price & chart').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`watch:${a.card_id}:${a.platform}`).setLabel('Watch card').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`newalert:${a.card_id}:${a.platform}`).setLabel('Set another target').setStyle(ButtonStyle.Secondary))],embeds:[brand(a.platform).setThumbnail(card?.image?.startsWith('https://')?card.image:null).setTitle('🔔 YOUR PRICE TARGET WAS REACHED').setDescription(`**${a.card_name}** · ${card?.rating??'—'} ${card?.position??''} · ${card?.rarity??'Player item'} · ${a.platform.toUpperCase()}`).addFields({name:'Observed price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`})]}));
-  });await fodderAlertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{const user=await client.users.fetch(userId);await user.send({nonce:`fbf${a.id}`,enforceNonce:true,embeds:[brand(a.platform).setTitle('🧱 FODDER DROP ALERT').setDescription(`**${a.rating}-rated fodder index** on **${a.platform.toUpperCase()}** has reached your target.`).addFields({name:'Current index',value:coins(value)+' coins',inline:true},{name:'Your trigger',value:`Down ${Number(a.drop_percent).toFixed(1)}% · ${coins(Number(a.baseline_price))} → ${coins(Number(a.target_price))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`}).setFooter({text:'Median of the 3 cheapest fresh tradeable cards at this rating'})]});});}catch(error){logFailure('Alert cycle failed',error);}finally{busy=false;}};
+  });await fodderAlertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{const user=await client.users.fetch(userId);await user.send({nonce:`fbf${a.id}`,enforceNonce:true,embeds:[brand(a.platform).setTitle('🧱 FODDER DROP ALERT').setDescription(`**${a.rating}-rated fodder index** on **${a.platform.toUpperCase()}** has reached your target.`).addFields({name:'Current index',value:coins(value)+' coins',inline:true},{name:'Your trigger',value:`Down ${Number(a.drop_percent).toFixed(1)}% · ${coins(Number(a.baseline_price))} → ${coins(Number(a.target_price))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`}).setFooter({text:'Median of the 3 cheapest fresh tradeable cards at this rating'})]});});await miscAlertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{const user=await client.users.fetch(userId),label=miscItemLabel(a.item_type,a.item_id);await user.send({nonce:`fbm${a.id}`,enforceNonce:true,components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`mischistory:${a.item_type}:${a.item_id}:168:${a.platform}`).setLabel('View 7-day chart').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`miscwatch:${a.item_type}:${a.item_id}:${a.platform}`).setLabel('Watch item').setStyle(ButtonStyle.Secondary))],embeds:[brand(a.platform).setTitle('🧴 CONSUMABLE PRICE ALERT').setDescription(`**${label}** on **${a.platform.toUpperCase()}** reached your target.`).addFields({name:'Current price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target_price))}`,inline:true},{name:'Saved from',value:coins(Number(a.baseline_price))+' coins',inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`}).setFooter({text:'One-shot alert · observed market price'})]});});}catch(error){logFailure('Alert cycle failed',error);}finally{busy=false;}};
   timer=setInterval(()=>void tick(),pollMs);await tick();
   const feedCycle=async()=>{if(feedBusy)return;feedBusy=true;try{await feedTick(alerts.pool,market,process.env.DISCORD_TOKEN!,feedPermission);}catch(e){logFailure('Feed scheduler failed',e);}finally{feedBusy=false;}};
   feedTimer=setInterval(()=>void feedCycle(),60000);await feedCycle();
