@@ -16,20 +16,54 @@ function decodeHtml(value: string): string {
     .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n,16)))
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)));
 }
+function attr(attrs:string,key:string):string {
+  const escaped=key.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  return attrs.match(new RegExp('\\b'+escaped+'\\s*=\\s*["\\']([^"\\']*)["\\']','i'))?.[1]||'';
+}
+function cleanName(value:string):string {
+  return decodeHtml(value)
+    .replace(/<(script|style|svg)[^>]*>[\s\S]*?<\/\1>/gi,' ')
+    .replace(/<[^>]+>/g,' ')
+    .replace(/\s+/g,' ')
+    .trim()
+    .replace(/^M(?=[\s.:])/,'')
+    .replace(/^manager\s+/i,'')
+    .trim();
+}
+function usableName(name:string):boolean {
+  return !!name && name.length<80 && /\p{L}/u.test(name) && !/^(manager|image|nation|league|gold|silver|bronze|m)$/i.test(name);
+}
 
-function parseManagers(html: string): Array<{ id: string; name: string }> {
-  const found = new Map<string,string>();
-  const anchors = html.matchAll(/<a\b([^>]*\bhref\s*=\s*["'](?:https?:\/\/www\.futnext\.com)?\/managers\/[^"'?#]*\/(\d+)(?:[/?#][^"']*)?["'][^>]*)>([\s\S]*?)<\/a>/gi);
-  for (const match of anchors) {
-    const [, attrs, id, inner] = match;
-    const text = decodeHtml(
-      (attrs.match(/\b(?:aria-label|title)\s*=\s*["']([^"']+)["']/i)?.[1] || inner)
-        .replace(/<(script|style|svg)[^>]*>[\s\S]*?<\/\1>/gi, '')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim()
-    ).replace(/^M(?=[^\p{L}\p{N}])[\p{P}\p{S}\p{Z}\s]*/u,'').trim();
-    if (id && text && text.length < 80 && !/^manager$/i.test(text)) found.set(id,text);
+/** Parse both FUT.GG manager-card artwork and FUTNext profile links.
+ * FUT.GG image URLs contain the exact manager item ID used by the price feed,
+ * and their alt text carries the full display name.
+ */
+export function parseManagers(html: string): Array<{ id:string; name:string }> {
+  const found=new Map<string,string>();
+  const add=(id:string|undefined,candidates:string[])=>{
+    if(!id||!/^\d+$/.test(id))return;
+    for(const raw of candidates){
+      const name=cleanName(raw);
+      if(usableName(name)){found.set(id,name);return;}
+    }
+  };
+  for(const match of html.matchAll(/<(?:img|source)\b([^>]*)>/gi)){
+    const attrs=match[1];
+    const source=[attr(attrs,'src'),attr(attrs,'data-src'),attr(attrs,'srcset')].join(' ');
+    const id=source.match(/\/27\/managers\/portrait\/(\d+)(?:[./?\s]|$)/i)?.[1];
+    if(id)add(id,[attr(attrs,'alt'),attr(attrs,'aria-label'),attr(attrs,'title')]);
+  }
+  for(const match of html.matchAll(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi)){
+    const [,attrs,inner]=match;
+    const href=decodeHtml(attr(attrs,'href'));
+    let path=href;
+    try{path=new URL(href,'https://www.futnext.com').pathname;}catch{}
+    const route=path.match(/\/(?:managers|manager)\/[^/]+\/(\d+)(?:\/|$)/i);
+    const id=route?.[1]||[href,inner].join(' ').match(/\/27\/managers\/portrait\/(\d+)(?:[./?\s]|$)/i)?.[1];
+    if(!id)continue;
+    const imageNames=[...inner.matchAll(/<img\b([^>]*)>/gi)].map(m=>attr(m[1],'alt'));
+    const visible=inner.replace(/<img\b[^>]*>/gi,' ').replace(/<(script|style|svg)[^>]*>[\s\S]*?<\/\1>/gi,' ').replace(/<[^>]+>/g,' ');
+    add(id,[attr(attrs,'aria-label'),attr(attrs,'title'),...imageNames,visible]);
   }
   return [...found].map(([id,name])=>({id,name}));
 }
@@ -62,17 +96,21 @@ export class MiscCatalog {
       const pages:Array<Array<{id:string;name:string}>>=[];
       for(let start=0;start<11;start+=3){
         const batch=await Promise.all(Array.from({length:Math.min(3,11-start)},async(_,offset)=>{
-          const page=start+offset,url='https://www.futnext.com/managers'+(page?'?page='+(page+1):'');
+          const page=start+offset;
+          const url='https://www.fut.gg/managers/'+(page?'?page='+(page+1):'');
           const response=await fetch(url,{headers:{'user-agent':'FutBot/1.0 (FC27 item name lookup)'},signal:AbortSignal.timeout(12000)});
-          if(!response.ok)throw new Error('Manager catalogue returned HTTP '+response.status);
+          if(!response.ok)throw new Error('FUT.GG manager catalogue returned HTTP '+response.status);
           return parseManagers(await response.text());
         }));
         pages.push(...batch);
       }
       const managers=new Map<string,string>();
-      for(const page of pages) for(const manager of page) managers.set(manager.id,manager.name);
-      if(managers.size<100) throw new Error('Manager catalogue response was incomplete; keeping the last known names.');
-      for(const [id,name] of managers) rows.push({type:'manager',id,name,source:'futnext-manager-catalog'});
+      for(const page of pages)for(const manager of page)managers.set(manager.id,manager.name);
+      if(managers.size<100){
+        // Keep the previous catalogue if FUT.GG changes its page markup or is unavailable.
+        throw new Error('FUT.GG manager catalogue was incomplete ('+managers.size+' names); keeping saved names.');
+      }
+      for(const [id,name] of managers)rows.push({type:'manager',id,name,source:'futgg-manager-catalog'});
       const ids=rows.map(r=>r.id),types=rows.map(r=>r.type),names=rows.map(r=>r.name),sources=rows.map(r=>r.source);
       await this.pool.query(
         `INSERT INTO futbot_misc_item_catalog(game_year,item_type,item_id,display_name,source,updated_at)
