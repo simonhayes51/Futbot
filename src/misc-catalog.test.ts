@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {parseManagers} from './misc-catalog.js';
+import {MiscCatalog,parseManagers} from './misc-catalog.js';
 
 test('manager catalogue maps FUT.GG artwork ids to full names',()=>{
  const html='<img src="https://game-assets.fut.gg/27/managers/portrait/1005571.cdbb85a361ba15ea.webp" alt="Diego Simeone">';
@@ -10,4 +10,10 @@ test('manager catalogue maps FUT.GG artwork ids to full names',()=>{
 test('manager catalogue accepts FUTNext profile links without www',()=>{
  const html='<a href="https://futnext.com/managers/d-simeone/1005571"><span>M</span><strong>D. Simeone</strong></a>';
  assert.deepEqual(parseManagers(html),[{id:'1005571',name:'D. Simeone'}]);
+});
+
+test('chemistry styles use names rather than item ids',()=>{
+ const catalog=new MiscCatalog({} as any,27);
+ assert.equal(catalog.label('chemistry_style','266'),'Shadow');
+ assert.equal(catalog.label('chemistry_style','269'),'Wall');
 });
