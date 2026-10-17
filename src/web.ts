@@ -73,7 +73,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
  if(path==='/api/consumables'&&method==='GET'){
   const platform=selectedMarket(url.searchParams.get('platform'),market.platform);
   let items;
-  try{items=await prices.miscItems(platform);}catch(error){if((error as any)?.code==='42P01')throw new HttpError(503,'Consumable prices are not connected yet. Deploy the TradeHQ misc-price feed first.');throw error;}
+  try{items=(await prices.miscItems(platform)).map(item=>({...item,fresh:isFresh(item.captured_at,market.maxAge)}));}catch(error){if((error as any)?.code==='42P01')throw new HttpError(503,'Consumable prices are not connected yet. Deploy the TradeHQ misc-price feed first.');throw error;}
   const [saved,alertRows]=await Promise.all([
     alerts.pool.query(`SELECT item_type,item_id::text,starting_price,watched_at FROM futbot_misc_watchlist WHERE user_id=$1 AND game_year=$2 AND platform=$3`,[s.user_id,prices.year,platform]),
     alerts.pool.query(`SELECT id,item_type,item_id::text,item_label,direction,target_price,baseline_price,state,created_at,triggered_at FROM futbot_misc_alerts WHERE user_id=$1 AND game_year=$2 AND platform=$3 ORDER BY id DESC LIMIT 100`,[s.user_id,prices.year,platform])
