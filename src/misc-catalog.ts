@@ -28,7 +28,7 @@ function parseManagers(html: string): Array<{ id: string; name: string }> {
         .replace(/<[^>]+>/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()
-    ).replace(/^(?:M\s*)+/i,'').trim();
+    ).replace(/^M(?=[^\p{L}\p{N}])[\p{P}\p{S}\p{Z}\s]*/u,'').trim();
     if (id && text && text.length < 80 && !/^manager$/i.test(text)) found.set(id,text);
   }
   return [...found].map(([id,name])=>({id,name}));
@@ -59,12 +59,16 @@ export class MiscCatalog {
       await this.load();
       const rows:Array<{type:CatalogItemType;id:string;name:string;source:string}>=[];
       for (const [id,name] of Object.entries(CHEMISTRY_STYLES)) rows.push({type:'chemistry_style',id,name,source:'ea-chemistry-style-resource-ids'});
-      const pages=await Promise.all(Array.from({length:11},async(_,i)=>{
-        const url='https://www.futnext.com/managers'+(i?'?page='+(i+1):'');
-        const response=await fetch(url,{headers:{'user-agent':'FutBot/1.0 (FC27 item name lookup)'},signal:AbortSignal.timeout(12000)});
-        if(!response.ok)throw new Error('Manager catalogue returned HTTP '+response.status);
-        return parseManagers(await response.text());
-      }));
+      const pages:Array<Array<{id:string;name:string}>>=[];
+      for(let start=0;start<11;start+=3){
+        const batch=await Promise.all(Array.from({length:Math.min(3,11-start)},async(_,offset)=>{
+          const page=start+offset,url='https://www.futnext.com/managers'+(page?'?page='+(page+1):'');
+          const response=await fetch(url,{headers:{'user-agent':'FutBot/1.0 (FC27 item name lookup)'},signal:AbortSignal.timeout(12000)});
+          if(!response.ok)throw new Error('Manager catalogue returned HTTP '+response.status);
+          return parseManagers(await response.text());
+        }));
+        pages.push(...batch);
+      }
       const managers=new Map<string,string>();
       for(const page of pages) for(const manager of page) managers.set(manager.id,manager.name);
       if(managers.size<100) throw new Error('Manager catalogue response was incomplete; keeping the last known names.');
