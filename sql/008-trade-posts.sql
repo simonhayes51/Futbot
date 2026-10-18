@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS futbot_trade_posts (
  state text NOT NULL DEFAULT 'active' CHECK(state IN ('active','posting','posted','cancelled','failed')),
  attempts integer NOT NULL DEFAULT 0,
  created_at timestamptz NOT NULL DEFAULT now(),
+ last_checked_at timestamptz,
  posting_at timestamptz,
  triggered_at timestamptz,
  message_id text,
