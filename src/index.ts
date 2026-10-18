@@ -179,8 +179,8 @@ async function sendTradePost(post:TradePost,observed:{value:number;capturedAt:Da
  if(!access.channel)throw new Error('FutBot or the trader can no longer post in the chosen channel.');
  const channel=await client.channels.fetch(post.channel_id);
  if(!channel||(channel.type!==ChannelType.GuildText&&channel.type!==ChannelType.GuildAnnouncement))throw new Error('The chosen trade channel is no longer available.');
- const [card,history]=await Promise.all([prices.card(post.card_id),prices.history(post.card_id,post.platform,24)]);
- const graph=await marketChart(`${post.card_name} · ${post.platform.toUpperCase()} 24-hour BIN`,history);
+ const [card,history]=await Promise.all([prices.card(post.card_id),prices.history(post.card_id,post.platform,24).catch(()=>[])]);
+ const graph=await marketChart(`${post.card_name} · ${post.platform.toUpperCase()} 24-hour BIN`,history).catch(()=>null);
  const settings=await guildSettings(alerts.pool,post.guild_id);
  return context.run(settings,async()=>{
   const version=`${card?.rating??'—'} ${card?.position??''} · ${card?.rarity??'Player card'}`;
