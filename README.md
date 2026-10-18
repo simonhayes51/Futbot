@@ -4,7 +4,7 @@ Ultimate Team Discord tools, an editorial marketing website and a live Discord-a
 
 ## What is implemented
 
-23 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`, `/flip`, `/consumable`, `/consumables`.
+24 Discord commands: `/price`, `/alert`, `/myalerts`, `/removealert`, `/pausealert`, `/resumealert`, `/testdm`, `/tax`, `/fodder`, `/movers`, `/budget`, `/watch`, `/unwatch`, `/watchlist`, `/compare`, `/dashboard`, `/help`, `/editalert`, `/serverpro`, `/serverwatchlist`, `/flip`, `/tradepost`, `/consumable`, `/consumables`.
 
 - Player artwork, current BIN, freshness, 24-hour/7-day hourly-median graphs, period median lows/highs and after-tax value. Buy/sell alert, watchlist and chart buttons.
 - Consumables boards: top fresh-priced risers and fallers, interactive item selection, and scheduled server feeds. Individual lookups open price history, watchlist and alert controls.
@@ -13,6 +13,7 @@ Ultimate Team Discord tools, an editorial marketing website and a live Discord-a
 - Movers: top ten risers/fallers against the median of at least three observations 24–25 hours ago. Missing baselines are excluded.
 - Budget finder and two-card price comparison.
 - `/flip` lets traders post a selected PS5/Xbox or PC market call with entry/target, trader-rated risk, card artwork, current price and chart; readers can save the same market to a watchlist or create a matching alert.
+- `/tradepost set` lets a member with the configured Trader role save a one-shot auto post: exact card, platform, fixed buy price or whole-percent drop from the current BIN, optional sell target/note, and their chosen text channel. FutBot checks fresh prices while hosted, then posts the card artwork and 24-hour chart once. `/tradepost list` and `/tradepost cancel` manage the trader’s own posts. Each trader may keep 10 active triggers.
 - Cross-device personal watchlists, private target alerts with DM outbox/retries, pause/resume/cancel, DM delivery test. Editable active/paused targets, exact-card artwork, saved vs current BIN, distance to target and timestamp; paginated Discord alert controls.
 - Live dashboard at `/app/`: Discord OAuth, private member data, card explorer, downloadable charts, fodder cards/board download, consumables market, movers, watchlists, alerts, tax calculator and manual investment records with fresh-price after-tax valuations.
 - Server manager workspace: server name/accent/footer, destination channel selection, live preview, manual fodder board publishing and activity log. Automatic fodder/movers/consumables/market-brief/shared-watchlist feeds, local posting schedules, scoped role mentions, previews, posting history and pause controls. Shared server lists and sponsored-seat management. Saved settings are used by new bot embeds; this does not rename the bot account or avatar.
@@ -50,6 +51,7 @@ PRICE_DATABASE_URL=postgresql://READ_ONLY_USER:.../existing_prices
 APP_DATABASE_URL=postgresql://APP_USER:.../futbot
 DISCORD_TOKEN=YOUR_BOT_TOKEN
 DISCORD_GUILD_ID=YOUR_TEST_SERVER_ID
+FUTBOT_TRADER_ROLE_NAME=Trader
 GAME_YEAR=27
 PLATFORM=ps5
 ALERT_POLL_MS=30000
@@ -143,6 +145,6 @@ X/TweetShift-style ingestion (provider access/costs not configured), sales-histo
 
 ## Runtime diagnostics
 
-The current startup log reports **21 commands**. A log reporting 6 or 17 commands is an older deployment. Redeploy the latest `main` revision. Database pools have finite connection/statement timeouts and idle error listeners. Alert failures report a redacted error code and actionable hint (including disk-full, connection resets, restarts and query timeouts), without printing connection strings. Receiving SIGTERM means the host asked the process to stop; check deployment/host events to establish why. Fontconfig discovery is bundled with the renderer.
+The startup log reports the number of registered commands. Redeploy the current `main` revision if the command count does not include `/tradepost`. Database pools have finite connection/statement timeouts and idle error listeners. Alert failures report a redacted error code and actionable hint (including disk-full, connection resets, restarts and query timeouts), without printing connection strings. Receiving SIGTERM means the host asked the process to stop; check deployment/host events to establish why. Fontconfig discovery is bundled with the renderer.
 
 Discord GET requests are coalesced and cached for ten seconds to avoid duplicate permission reads. Writes explicitly bypass cached permission/channel checks. Rate-limit responses respect Retry-After before one bounded retry; longer limits are shown with a wait time. Server discovery intersects the user guild list with the bot guild list rather than probing every user server. Market lists exclude incomplete/unknown metadata; movers show 80+ rated items priced at least 1,000 coins, using a median baseline with at least three observations. Large percentage changes are flagged for verification, not silently removed.
