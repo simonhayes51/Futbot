@@ -52,9 +52,9 @@ const commands=[...extraCommands,
       .addStringOption(o=>o.setName('platform').setDescription('Market for this trade').setRequired(true).addChoices({name:'PS5 / Xbox · Console',value:'ps5'},{name:'PC',value:'pc'}))
       .addStringOption(o=>o.setName('trigger').setDescription('When should the post go out?').setRequired(true).addChoices({name:'BIN reaches a coin price',value:'price'},{name:'Drop by a percentage from current BIN',value:'drop_pct'}))
       .addIntegerOption(o=>o.setName('amount').setDescription('Coin price, or whole percentage drop (1–50)').setRequired(true).setMinValue(1).setMaxValue(15000000))
+      .addChannelOption(o=>o.setName('channel').setDescription('Choose where FutBot should post').addChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement).setRequired(true))
       .addIntegerOption(o=>o.setName('sell').setDescription('Optional sell target in coins').setMinValue(1).setMaxValue(15000000))
-      .addStringOption(o=>o.setName('note').setDescription('Optional trade note').setMaxLength(240))
-      .addChannelOption(o=>o.setName('channel').setDescription('Choose where FutBot should post').addChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement).setRequired(true)))
+      .addStringOption(o=>o.setName('note').setDescription('Optional trade note').setMaxLength(240)))
     .addSubcommand(s=>s.setName('list').setDescription('View your active and recent auto posts'))
     .addSubcommand(s=>s.setName('cancel').setDescription('Cancel one of your active auto posts').addStringOption(o=>o.setName('id').setDescription('Trade post ID from /tradepost list').setRequired(true))),
   new SlashCommandBuilder().setName('alert').setDescription('Get a private DM when a card reaches your price').addStringOption(playerOption)
