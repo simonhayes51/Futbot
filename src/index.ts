@@ -28,7 +28,7 @@ if(![year,maxAge,limit,pollMs].every(Number.isFinite))throw new Error('Invalid n
 const prices=new PriceRepository(process.env.PRICE_DATABASE_URL!,year);
 const alerts=new AlertRepository(process.env.APP_DATABASE_URL!);
 const miscCatalog=new MiscCatalog(alerts.pool,year);
-const client=new Client({intents:[GatewayIntentBits.Guilds]});
+const client=new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildMembers]});
 const context=new AsyncLocalStorage<GuildSettings>();
 const market=new MarketService(prices,platform,maxAge);
 const brand=(pricePlatform=platform)=>{const b=context.getStore()??defaultBrand;return new EmbedBuilder().setColor(b.accent as `#${string}`).setAuthor({name:b.name}).setFooter({text:`${b.footer} • FC${year} • ${pricePlatform.toUpperCase()}`});};
