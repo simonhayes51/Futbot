@@ -7,7 +7,7 @@ export type TradePost={
  id:string;guild_id:string;user_id:string;channel_id:string;card_id:string;card_name:string;
  game_year:number;platform:"ps5"|"pc";trigger_type:TradeTriggerType;trigger_value:number;
  baseline_price:number;buy_price:number;sell_price:number|null;note:string;state:string;attempts:number;
- created_at:Date;posting_at:Date|null;triggered_at:Date|null;message_id:string|null;last_error:string|null;
+ created_at:Date;last_checked_at:Date|null;posting_at:Date|null;triggered_at:Date|null;message_id:string|null;last_error:string|null;
 };
 export type NewTradePost={guildId:string;userId:string;channelId:string;cardId:string;cardName:string;year:number;platform:"ps5"|"pc";triggerType:TradeTriggerType;triggerValue:number;baselinePrice:number;buyPrice:number;sellPrice:number|null;note:string};
 
@@ -48,7 +48,7 @@ export async function cancelTradePost(pool:pg.Pool,guildId:string,userId:string,
 }
 
 export async function tradePostTick(pool:pg.Pool,prices:PriceRepository,maxAge:number,publish:(post:TradePost,price:{value:number;capturedAt:Date})=>Promise<string|null>){
- const due=(await pool.query("SELECT id FROM futbot_trade_posts WHERE state='active' OR (state='posting' AND posting_at<now()-interval '5 minutes') ORDER BY created_at LIMIT 30")).rows;
+ const due=(await pool.query("SELECT id FROM futbot_trade_posts WHERE state='active' OR (state='posting' AND posting_at<now()-interval '5 minutes') ORDER BY last_checked_at NULLS FIRST,created_at LIMIT 30")).rows;
  for(const candidate of due){
   const claimed=await pool.query("UPDATE futbot_trade_posts SET state='posting',posting_at=now() WHERE id=$1 AND (state='active' OR (state='posting' AND posting_at<now()-interval '5 minutes')) RETURNING *",[candidate.id]);
   if(!claimed.rowCount)continue;
@@ -56,14 +56,14 @@ export async function tradePostTick(pool:pg.Pool,prices:PriceRepository,maxAge:n
   try{
    const latest=await prices.latest(post.card_id,post.platform);
    if(!latest||!isFresh(latest.capturedAt,maxAge)||latest.value>Number(post.buy_price)){
-    await pool.query("UPDATE futbot_trade_posts SET state='active',posting_at=NULL WHERE id=$1 AND state='posting'",[post.id]);continue;
+    await pool.query("UPDATE futbot_trade_posts SET state='active',posting_at=NULL,last_checked_at=now() WHERE id=$1 AND state='posting'",[post.id]);continue;
    }
    const messageId=await publish(post,{value:Number(latest.value),capturedAt:latest.capturedAt});
    if(!messageId){await pool.query("UPDATE futbot_trade_posts SET state='cancelled',posting_at=NULL,last_error='Trader role or channel access was removed.' WHERE id=$1 AND state='posting'",[post.id]);continue;}
    await pool.query("UPDATE futbot_trade_posts SET state='posted',posting_at=NULL,triggered_at=$2,message_id=$3,last_error=NULL WHERE id=$1 AND state='posting'",[post.id,latest.capturedAt,messageId]);
   }catch(error){
    const message=error instanceof Error?error.message:"Delivery failed";
-   await pool.query("UPDATE futbot_trade_posts SET attempts=attempts+1,state=CASE WHEN attempts>=4 THEN 'failed' ELSE 'active' END,posting_at=NULL,last_error=$2 WHERE id=$1 AND state='posting'",[post.id,message.slice(0,300)]).catch(()=>{});
+   await pool.query("UPDATE futbot_trade_posts SET attempts=attempts+1,state=CASE WHEN attempts>=4 THEN 'failed' ELSE 'active' END,posting_at=NULL,last_checked_at=now(),last_error=$2 WHERE id=$1 AND state='posting'",[post.id,message.slice(0,300)]).catch(()=>{});
   }
  }
 }
