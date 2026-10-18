@@ -1,4 +1,4 @@
-import {benefits,membership,feedPermission} from './community.js';
+import {benefits,membership,feedPermission,hasTraderRole,tradePostAccess} from './community.js';
 import {claimSeat,requireServerPlan,serverPlan} from './plans.js';
 import {feedTick,sharedCards} from './feeds.js';
 import {alertPrices,alertPriceText} from './alert-view.js';
@@ -10,13 +10,14 @@ import {startWeb} from './web.js';
 import type {Server} from 'node:http';
 import {extraCommands,handleTool} from './tools.js';
 import {guildSettings,defaultBrand,watch,type GuildSettings} from './settings.js';
-import { Client, MessageFlags, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, type Interaction } from 'discord.js';
+import { Client, MessageFlags, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, type Interaction } from 'discord.js';
 import { PriceRepository,isMiscItemType,type MiscItemType } from './prices.js';
 import { MiscCatalog } from './misc-catalog.js';
 import { AlertRepository,alertTick,fodderAlertTick,miscAlertTick,type Alert } from './alerts.js';
 import { coins,isFresh,tradeProfit,type Direction,type Card } from './domain.js';
 import { marketChart } from './chart.js';
 import {tradeReceipt} from './boards.js';
+import {createTradePost,cancelTradePost,listTradePosts,tradeBuyPrice,tradePostTick,type TradePost} from './trade-posts.js';
 
 for(const key of ['PRICE_DATABASE_URL','APP_DATABASE_URL','DISCORD_TOKEN'])if(!process.env[key])throw new Error(`Missing ${key}. See .env.example.`);
 if(process.env.PRICE_DATABASE_URL===process.env.APP_DATABASE_URL)throw new Error('Use a separate application database');
@@ -45,6 +46,17 @@ const commands=[...extraCommands,
     .addIntegerOption(o=>o.setName('entry').setDescription('Your suggested buy price or max entry').setMinValue(1).setMaxValue(15000000))
     .addIntegerOption(o=>o.setName('target').setDescription('Your suggested sell target').setMinValue(1).setMaxValue(15000000))
     .addStringOption(o=>o.setName('note').setDescription('Why you like the flip (optional)').setMaxLength(240)),
+  new SlashCommandBuilder().setName('tradepost').setDescription('Set a trader-only automatic buy post')
+    .addSubcommand(s=>s.setName('set').setDescription('Post a trade automatically when your buy trigger is met')
+      .addStringOption(o=>o.setName('player').setDescription('Choose an exact player card').setRequired(true).setAutocomplete(true))
+      .addStringOption(o=>o.setName('platform').setDescription('Market for this trade').setRequired(true).addChoices({name:'PS5 / Xbox · Console',value:'ps5'},{name:'PC',value:'pc'}))
+      .addStringOption(o=>o.setName('trigger').setDescription('When should the post go out?').setRequired(true).addChoices({name:'BIN reaches a coin price',value:'price'},{name:'Drop by a percentage from current BIN',value:'drop_pct'}))
+      .addIntegerOption(o=>o.setName('amount').setDescription('Coin price, or whole percentage drop (1–50)').setRequired(true).setMinValue(1).setMaxValue(15000000))
+      .addIntegerOption(o=>o.setName('sell').setDescription('Optional sell target in coins').setMinValue(1).setMaxValue(15000000))
+      .addStringOption(o=>o.setName('note').setDescription('Optional trade note').setMaxLength(240))
+      .addChannelOption(o=>o.setName('channel').setDescription('Choose where FutBot should post').addChannelTypes(ChannelType.GuildText,ChannelType.GuildAnnouncement).setRequired(true)))
+    .addSubcommand(s=>s.setName('list').setDescription('View your active and recent auto posts'))
+    .addSubcommand(s=>s.setName('cancel').setDescription('Cancel one of your active auto posts').addStringOption(o=>o.setName('id').setDescription('Trade post ID from /tradepost list').setRequired(true))),
   new SlashCommandBuilder().setName('alert').setDescription('Get a private DM when a card reaches your price').addStringOption(playerOption)
     .addStringOption(o=>o.setName('direction').setDescription('Target direction').setRequired(true).addChoices({name:'At or below',value:'below'},{name:'At or above',value:'above'}))
     .addIntegerOption(o=>o.setName('target').setDescription('Target price in coins').setRequired(true).setMinValue(1).setMaxValue(15000000)),
@@ -160,6 +172,31 @@ async function showAlerts(user:string,page=0){
  if(pages>1)components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`alertpage:${page-1}`).setLabel('Previous').setDisabled(page===0).setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`alertpage:${page+1}`).setLabel(`Next · ${page+1}/${pages}`).setDisabled(page===pages-1).setStyle(ButtonStyle.Secondary)));
  return {embeds,components};
 }
+
+async function sendTradePost(post:TradePost,observed:{value:number;capturedAt:Date}):Promise<string|null>{
+ const access=await tradePostAccess(post.guild_id,post.user_id,post.channel_id);
+ if(!access.trader)return null;
+ if(!access.channel)throw new Error('FutBot or the trader can no longer post in the chosen channel.');
+ const channel=await client.channels.fetch(post.channel_id);
+ if(!channel||(channel.type!==ChannelType.GuildText&&channel.type!==ChannelType.GuildAnnouncement))throw new Error('The chosen trade channel is no longer available.');
+ const [card,history]=await Promise.all([prices.card(post.card_id),prices.history(post.card_id,post.platform,24)]);
+ const graph=await marketChart(`${post.card_name} · ${post.platform.toUpperCase()} 24-hour BIN`,history);
+ const settings=await guildSettings(alerts.pool,post.guild_id);
+ return context.run(settings,async()=>{
+  const version=`${card?.rating??'—'} ${card?.position??''} · ${card?.rarity??'Player card'}`;
+  const embed=brand(post.platform).setTitle('🔔 AUTO TRADE POST').setDescription(`**${post.card_name}**\n${version}`)
+   .addFields({name:'BUY PRICE',value:`At or below **${coins(post.buy_price)} coins**`,inline:true},{name:'PRICE AT TRIGGER',value:`**${coins(observed.value)} coins**`,inline:true},{name:'PLATFORM',value:post.platform.toUpperCase(),inline:true});
+  if(post.sell_price)embed.addFields({name:'SELL TARGET',value:`${coins(post.sell_price)} coins`,inline:true});
+  if(post.trigger_type==='drop_pct')embed.addFields({name:'TRIGGER',value:`${Number(post.trigger_value)}% below setup BIN (${coins(post.baseline_price)})`,inline:true});
+  if(post.note)embed.addFields({name:'NOTE',value:post.note,inline:false});
+  embed.addFields({name:'SET BY',value:`<@${post.user_id}>`,inline:true}).setTimestamp(observed.capturedAt);
+  if(card?.image?.startsWith('https://'))embed.setThumbnail(card.image);
+  const files=graph?[new AttachmentBuilder(graph,{name:'trade-price-24h.png'})]:[];
+  if(graph)embed.setImage('attachment://trade-price-24h.png');
+  const message=await channel.send({embeds:[embed],files,allowedMentions:{parse:[]},nonce:`fbtp${post.id}`,enforceNonce:true});
+  return message.id;
+ });
+}
 async function handle(i:Interaction){
   if(i.isAutocomplete()){
     const q=i.options.getFocused();
@@ -201,6 +238,33 @@ async function handle(i:Interaction){
   if(!i.isChatInputCommand())return;
   await i.deferReply({flags:!['price','consumable','consumables','flip','fodder','movers','budget','compare'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
   if(extraCommands.some(c=>c.name===i.commandName)){await handleTool(i,market,alerts,brand,resolveCard,await benefits(alerts.pool,i.user.id));return;}
+  if(i.commandName==='tradepost'){
+   if(!i.guildId)throw new Error('Run this command inside your Discord server.');
+   if(!await hasTraderRole(i.guildId,i.user.id))throw new Error('Only members with the Trader role can create or manage auto trade posts.');
+   const sub=i.options.getSubcommand();
+   if(sub==='set'){
+    const card=await resolveCard(i.options.getString('player',true)),pricePlatform=i.options.getString('platform',true) as 'ps5'|'pc';
+    const triggerType=i.options.getString('trigger',true) as 'price'|'drop_pct',amount=i.options.getInteger('amount',true);
+    const sellPrice=i.options.getInteger('sell'),channel=i.options.getChannel('channel',true);
+    const access=await tradePostAccess(i.guildId,i.user.id,channel.id);
+    if(!access.trader)throw new Error('Only members with the Trader role can create auto trade posts.');
+    if(!access.channel)throw new Error('Choose a channel you can post in where FutBot has View Channel, Send Messages, Embed Links and Attach Files.');
+    const latest=await prices.latest(card.id,pricePlatform);
+    if(!latest||!isFresh(latest.capturedAt,maxAge))throw new Error('There is no fresh BIN for this card and market. Try again after the next price update.');
+    const buyPrice=tradeBuyPrice(triggerType,amount,latest.value);
+    if(buyPrice>=latest.value)throw new Error('The buy trigger must be below the current BIN, or it would post immediately.');
+    if(sellPrice!==null&&sellPrice<=buyPrice)throw new Error('The sell target must be higher than the buy price.');
+    const id=await createTradePost(alerts.pool,{guildId:i.guildId,userId:i.user.id,channelId:channel.id,cardId:card.id,cardName:card.name,year,platform:pricePlatform,triggerType,triggerValue:amount,baselinePrice:latest.value,buyPrice,sellPrice,note:i.options.getString('note')??''});
+    const triggerText=triggerType==='price'?`BIN at or below ${coins(buyPrice)}`:`${amount}% drop from ${coins(latest.value)} to ${coins(buyPrice)}`;
+    await i.editReply(`✅ Auto post #${id} set for **${card.name}**. Trigger: ${triggerText} coins on ${pricePlatform.toUpperCase()}. Destination: <#${channel.id}>. FutBot will post once when a fresh price meets it.`);return;
+   }
+   if(sub==='list'){
+    const rows=await listTradePosts(alerts.pool,i.guildId,i.user.id);
+    const body=rows.map(r=>`**#${r.id} · ${String(r.card_name).replace(/[*_`~|\\]/g,'')}** · ${String(r.platform).toUpperCase()} · buy ≤ ${coins(Number(r.buy_price))}${r.sell_price?` · sell ${coins(Number(r.sell_price))}`:''} · <#${r.channel_id}> · ${String(r.state).toUpperCase()}`).join('\n')||'You have no active or recent auto posts.';
+    await i.editReply({embeds:[brand().setTitle('YOUR AUTO TRADE POSTS').setDescription(body)]});return;
+   }
+   if(sub==='cancel'){await cancelTradePost(alerts.pool,i.guildId,i.user.id,i.options.getString('id',true));await i.editReply('✅ Auto trade post cancelled.');return;}
+  }
   if(i.commandName==='testdm'){try{await i.user.send({embeds:[brand().setTitle('NOTIFICATIONS / CONNECTED').setDescription('FutBot can reach your DMs. Price alerts will arrive here when a fresh observed price meets your target.')]});await i.editReply('Test notification sent. Check your DMs.');}catch{await i.editReply('I could not send you a DM. Enable direct messages from this server, check that FutBot is not blocked, then run /testdm again.');}}
   if(i.commandName==='consumable'){const type=i.options.getString('type',true) as MiscItemType,itemId=i.options.getString('item',true),pricePlatform=i.options.getString('platform')??platform;await i.editReply(await showMiscPrice(type,itemId,24,pricePlatform));}
   if(i.commandName==='price')await i.editReply(await showPrice(await resolveCard(i.options.getString('player',true)),24,i.options.getString('platform')??platform));
@@ -215,7 +279,7 @@ async function handle(i:Interaction){
 
 }
 client.on('interactionCreate',i=>{(async()=>i.guildId&&(await serverPlan(alerts.pool,i.guildId)).feeds?guildSettings(alerts.pool,i.guildId):defaultBrand)().then(b=>context.run(b,()=>handle(i))).catch(async e=>{const message=e instanceof Error&& !('code' in e)?e.message:'Something went wrong. Please try again shortly.';if(i.isAutocomplete()){await i.respond([]).catch(()=>{});return;}if(i.isRepliable()){if(i.deferred||i.replied)await i.editReply({content:message,embeds:[],components:[]}).catch(()=>{});else await i.reply({content:message,flags:MessageFlags.Ephemeral}).catch(()=>{});}});});
-let timer:NodeJS.Timeout|undefined,feedTimer:NodeJS.Timeout|undefined,catalogTimer:NodeJS.Timeout|undefined,busy=false,feedBusy=false;
+let timer:NodeJS.Timeout|undefined,feedTimer:NodeJS.Timeout|undefined,catalogTimer:NodeJS.Timeout|undefined,tradePostTimer:NodeJS.Timeout|undefined,busy=false,feedBusy=false,tradePostBusy=false;
 let web:Server|undefined;
 client.on('error',e=>console.error('Discord client error:',e.message));
 client.once('clientReady',()=>{void startBot().catch(async e=>{console.error('FutBot startup failed:',e?.code===10004?'DISCORD_GUILD_ID is inaccessible. Check the server ID and invite this bot, or remove DISCORD_GUILD_ID for global commands.':e instanceof Error?e.message:'Unknown startup error');await stop(1);});});
@@ -231,10 +295,12 @@ async function startBot(){
     const user=await client.users.fetch(userId);const card=await prices.card(a.card_id).catch(()=>null);const b=await guildSettings(alerts.pool,(a as any).guild_id);await context.run(b,()=>user.send({nonce:`fb${a.id}`,enforceNonce:true,components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`history:${a.card_id}:24:${a.platform}`).setLabel('View price & chart').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`watch:${a.card_id}:${a.platform}`).setLabel('Watch card').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId(`newalert:${a.card_id}:${a.platform}`).setLabel('Set another target').setStyle(ButtonStyle.Secondary))],embeds:[brand(a.platform).setThumbnail(card?.image?.startsWith('https://')?card.image:null).setTitle('🔔 YOUR PRICE TARGET WAS REACHED').setDescription(`**${a.card_name}** · ${card?.rating??'—'} ${card?.position??''} · ${card?.rarity??'Player item'} · ${a.platform.toUpperCase()}`).addFields({name:'Observed price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`})]}));
   });await fodderAlertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{const user=await client.users.fetch(userId);await user.send({nonce:`fbf${a.id}`,enforceNonce:true,embeds:[brand(a.platform).setTitle('🧱 FODDER DROP ALERT').setDescription(`**${a.rating}-rated fodder index** on **${a.platform.toUpperCase()}** has reached your target.`).addFields({name:'Current index',value:coins(value)+' coins',inline:true},{name:'Your trigger',value:`Down ${Number(a.drop_percent).toFixed(1)}% · ${coins(Number(a.baseline_price))} → ${coins(Number(a.target_price))}`,inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`}).setFooter({text:'Median of the 3 cheapest fresh tradeable cards at this rating'})]});});await miscAlertTick(alerts,prices,maxAge,async(userId,a,value,at)=>{const user=await client.users.fetch(userId),latest=await prices.miscLatest(a.item_type,a.item_id,a.platform).catch(()=>null),label=latest?.display_name||miscCatalog.label(a.item_type,a.item_id);await user.send({nonce:`fbm${a.id}`,enforceNonce:true,components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setCustomId(`mischistory:${a.item_type}:${a.item_id}:168:${a.platform}`).setLabel('View 7-day chart').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId(`miscwatch:${a.item_type}:${a.item_id}:${a.platform}`).setLabel('Watch item').setStyle(ButtonStyle.Secondary))],embeds:[brand(a.platform).setTitle('🧴 CONSUMABLE PRICE ALERT').setDescription(`**${label}** on **${a.platform.toUpperCase()}** reached your target.`).addFields({name:'Current price',value:coins(value)+' coins',inline:true},{name:'Your target',value:`${a.direction} ${coins(Number(a.target_price))}`,inline:true},{name:'Saved from',value:coins(Number(a.baseline_price))+' coins',inline:true},{name:'Observed',value:`<t:${Math.floor(at.getTime()/1000)}:R>`}).setFooter({text:'One-shot alert · observed market price'})]});});}catch(error){logFailure('Alert cycle failed',error);}finally{busy=false;}};
   timer=setInterval(()=>void tick(),pollMs);await tick();
+  const tradePostCycle=async()=>{if(tradePostBusy)return;tradePostBusy=true;try{await tradePostTick(alerts.pool,prices,maxAge,sendTradePost);}catch(e){logFailure('Trade post scheduler failed',e);}finally{tradePostBusy=false;}};
+  tradePostTimer=setInterval(()=>void tradePostCycle(),pollMs);await tradePostCycle();
   const feedCycle=async()=>{if(feedBusy)return;feedBusy=true;try{await feedTick(alerts.pool,market,process.env.DISCORD_TOKEN!,feedPermission);}catch(e){logFailure('Feed scheduler failed',e);}finally{feedBusy=false;}};
   feedTimer=setInterval(()=>void feedCycle(),60000);await feedCycle();
 }
-async function stop(code=0){if(web)web.close();if(timer)clearInterval(timer);if(feedTimer)clearInterval(feedTimer);if(catalogTimer)clearInterval(catalogTimer);client.destroy();await Promise.all([prices.pool.end(),alerts.pool.end()]);process.exit(code);}
+async function stop(code=0){if(web)web.close();if(timer)clearInterval(timer);if(feedTimer)clearInterval(feedTimer);if(catalogTimer)clearInterval(catalogTimer);if(tradePostTimer)clearInterval(tradePostTimer);client.destroy();await Promise.all([prices.pool.end(),alerts.pool.end()]);process.exit(code);}
 process.on('SIGTERM',()=>{console.log('Received SIGTERM; shutting down FutBot.');void stop();});process.on('SIGINT',()=>{console.log('Received SIGINT; shutting down FutBot.');void stop();});
 await Promise.all([prices.pool.query('SELECT 1'),alerts.pool.query('SELECT 1 FROM futbot_alerts LIMIT 0')]);
 await client.login(process.env.DISCORD_TOKEN);
