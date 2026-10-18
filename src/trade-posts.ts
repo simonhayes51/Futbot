@@ -17,7 +17,7 @@ export function tradeBuyPrice(type:TradeTriggerType,value:number,baseline:number
   if(!Number.isInteger(value)||value<1000||value>15000000)throw new Error("Choose a buy price between 1,000 and 15,000,000 coins.");
   return value;
  }
- if(type!=="drop_pct"||value<1||value>50)throw new Error("Choose a whole percentage from 1 to 50.");
+ if(type!=="drop_pct"||!Number.isInteger(value)||value<1||value>50)throw new Error("Choose a whole percentage from 1 to 50.");
  return Math.max(1,Math.floor(baseline*(1-value/100)));
 }
 
