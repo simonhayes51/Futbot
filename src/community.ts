@@ -5,6 +5,17 @@ import {Billing,catalogue,billingReady} from './billing.js';
 import {validateFeed,nextRun,buildFeed,sharedEntries,type Feed} from './feeds.js';
 import type {MarketService} from './market.js';
 export async function membership(guild:string,user:string,fresh=false){try{return await discord(`/guilds/${guild}/members/${user}`,process.env.DISCORD_TOKEN!,'GET',undefined,false,fresh);}catch(e){if(e instanceof HttpError&&e.status===404)return null;throw e;}}
+export async function tradePostAccess(guildId:string,userId:string,channelId:string){
+ const roleName=(process.env.FUTBOT_TRADER_ROLE_NAME??'Trader').trim().toLocaleLowerCase('en');
+ const [guild,roles,channel,bot]=await Promise.all([discord('/guilds/'+guildId,process.env.DISCORD_TOKEN!),discord('/guilds/'+guildId+'/roles',process.env.DISCORD_TOKEN!),discord('/channels/'+channelId,process.env.DISCORD_TOKEN!),discord('/users/@me',process.env.DISCORD_TOKEN!)]);
+ if(channel.guild_id!==guildId||![0,5].includes(channel.type))return {trader:false,channel:false};
+ const [member,botMember]=await Promise.all([membership(guildId,userId,true),discord(`/guilds/${guildId}/members/${bot.id}`,process.env.DISCORD_TOKEN!, 'GET',undefined,false,true)]);
+ if(!member)return {trader:false,channel:false};
+ const traderRole=roles.find((r:any)=>String(r.name).trim().toLocaleLowerCase('en')===roleName);
+ const trader=!!traderRole&&member.roles.includes(traderRole.id);
+ const channelAllowed=trader&&channelPermissions(guild,roles,member,channel,false)&&channelPermissions(guild,roles,botMember,channel,true);
+ return {trader,channel:channelAllowed};
+}
 export const benefits=(pool:pg.Pool,user:string)=>userBenefits(pool,user,g=>membership(g,user));
 export async function feedPermission(feed:Feed){
  const token=process.env.DISCORD_TOKEN!;
