@@ -29,13 +29,13 @@ test('market cache coalesces requests and expires by checked time, not history w
 });
 test('coin and rating inputs are bounded',()=>{assert.throws(()=>targetValue(NaN));assert.throws(()=>targetValue(0));assert.throws(()=>ratingValue(100));assert.equal(ratingValue(85),85);});
 test('movers exclude incomplete cards, low ratings and cheap-card noise without hiding large moves',()=>{const cards=[c('a',85,2000,-80),{...c('b',85,2000,-90),name:'Unknown card'},c('c',70,2000,-99),c('d',85,500,-98)];assert.deepEqual(movers(cards,'fallers').map(c=>c.id),['a']);});
-test('market snapshots use the isolated PC history table when PC is selected',async()=>{let statement='';const prices:any={year:27,pool:{query:async(sql:string)=>{statement=sql;return {rows:[]};}}};await new MarketService(prices,'pc',15).snapshot();assert.match(statement,/FROM public\\.futbot_pc_bin_history h/);assert.match(statement,/h\\.platform=\\$2/);});
+test('market snapshots use the isolated PC history table when PC is selected',async()=>{let statement='';const prices:any={year:27,pool:{query:async(sql:string)=>{statement=sql;return {rows:[]};}}};await new MarketService(prices,'pc',15).snapshot();assert.match(statement,/FROM public\.futbot_pc_bin_history h/);assert.match(statement,/h\.platform=\$2/);});
 test('market query uses successful check timestamps and loads the latest unchanged history row',async()=>{
  let statement='';
  const prices:any={year:27,pool:{query:async(sql:string)=>{statement=sql;return {rows:[]};}}};
  await new MarketService(prices,'ps5',15).snapshot();
- assert.match(statement,/p\\.price_checked_at/);
- assert.match(statement,/p\\.last_price_status/);
- assert.doesNotMatch(statement,/h\\.captured_at>=now\\(\\)/);
+ assert.match(statement,/p\.price_checked_at/);
+ assert.match(statement,/p\.last_price_status/);
+ assert.doesNotMatch(statement,/h\.captured_at>=now\(\)/);
 });
 test('market query does not filter on unpopulated tradeability metadata',async()=>{let statement='';const prices:any={year:27,pool:{query:async(sql:string)=>{statement=sql;return {rows:[]};}}};await new MarketService(prices,'ps5',15).snapshot();assert.doesNotMatch(statement,/is_tradeable/);});
