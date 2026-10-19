@@ -311,7 +311,7 @@ async function main() {
       // State includes signals/outcomes for seven days, avoiding an unbounded log.
       await atomicJSON(file, state);
       await atomicJSON(resolve(directory, 'latest.json'), report);
-      console.log(JSON.stringify(report));
+      console.log(`Flip test report: ${JSON.stringify(report)}`);
     };
     await tick();
     if (!process.argv.includes('--once')) {
