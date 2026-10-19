@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {MarketService,fodderRows,movers,ratingValue,targetValue,fodderIndex,hasFreshPrice,type MarketCard} from './market.js';
+import {MarketService,fodderRows,movers,ratingValue,targetValue,fodderIndex,hasFreshPrice,currentPriceStatus,type MarketCard} from './market.js';
 const c=(id:string,rating:number,value:number,change:number|null):MarketCard=>({id,name:'Card '+id,rating,value,change,position:'CM',rarity:'Gold',club:null,image:null,capturedAt:new Date(),checkedAt:new Date(),previous:null,previousAt:null});
 test('fodder ladder groups exact ratings and picks cheapest alternatives',()=>{const rows=fodderRows([c('a',85,3000,0),c('b',85,1000,0),c('c',84,500,0)],85);assert.equal(rows.length,1);assert.deepEqual(rows[0].cards.map(c=>c.id),['b','a']);});
 test('fodder index uses the median of the three cheapest fresh tradeable cards',()=>{const cards=[c('a',87,3000,0),c('b',87,1000,0),c('c',87,2000,0),c('d',87,4000,0)];assert.equal(fodderIndex(cards,87),2000);assert.equal(fodderIndex(cards.slice(0,2),87),null);});
@@ -13,6 +13,8 @@ test('unchanged prices stay fresh on their successful check time, while no-marke
  assert.equal(hasFreshPrice(oldHistory,'bulk_feed',15,now),false);
  assert.equal(hasFreshPrice(recentCheck,'bulk_no_market',15,now),false);
  assert.equal(hasFreshPrice(recentCheck,'no_active_market',15,now),false);
+ assert.equal(currentPriceStatus('bulk_no_market',recentCheck,oldHistory),null);
+ assert.equal(currentPriceStatus('bulk_no_market',oldHistory,recentCheck),'bulk_no_market');
 });
 test('market cache coalesces requests and expires by checked time, not history writes',async()=>{
  let calls=0;
@@ -36,6 +38,7 @@ test('market query uses successful check timestamps and loads the latest unchang
  await new MarketService(prices,'ps5',15).snapshot();
  assert.match(statement,/p\.price_checked_at/);
  assert.match(statement,/p\.last_price_status/);
+ assert.match(statement,/p\.price_updated_at/);
  assert.match(statement,/CASE WHEN \$2='ps5'/);
  assert.doesNotMatch(statement,/h\.captured_at>=now\(\)/);
 });
