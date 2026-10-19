@@ -29,8 +29,8 @@ export class MarketService{
  p.rating,p.primary_position AS position,p.rarity,p.club,
  COALESCE(p.card_image_stored_url,p.card_image_url,p.player_image_url) AS image,
  l.lowest_bin::int AS value,l.captured_at AS "capturedAt",
- GREATEST(l.captured_at,COALESCE(p.price_checked_at,l.captured_at)) AS "checkedAt",
- p.last_price_status AS "priceStatus",
+ CASE WHEN $2='ps5' THEN GREATEST(l.captured_at,COALESCE(p.price_checked_at,l.captured_at)) ELSE l.captured_at END AS "checkedAt",
+ CASE WHEN $2='ps5' THEN p.last_price_status ELSE NULL END AS "priceStatus",
  b.lowest_bin::int AS previous,b.captured_at AS "previousAt"
  FROM public.futgg_players p
  JOIN LATERAL (
