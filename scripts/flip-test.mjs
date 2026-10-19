@@ -52,6 +52,15 @@ function hourly(card, now) {
     .map(p => ({at: p.at, price: median(p.values.filter(v => Number.isFinite(v) && v > 0))}));
 }
 
+export function historyCoverage(card, now) {
+  const h = hourly(card, now);
+  const days = [0, 1, 2].map(i => h.filter(p => p.at >= now - (i + 1) * DAY && p.at < now - i * DAY));
+  const hours = days.map(d => d.length), total = hours.reduce((a, b) => a + b, 0);
+  const partialDays = hours.filter(n => n < 18).length;
+  return {h, days, hours, total, partialDays,
+    usable: hours.every(n => n >= 12) && partialDays <= 1 && total >= 54};
+}
+
 // Seed only selected cards, using bounded batches of hourly aggregates. This also
 // upgrades existing test state; a per-card marker prevents repeated backfills.
 export function seedHistory(state, ids, rows, now) {
@@ -124,10 +133,9 @@ export function evaluate(card, now) {
   const recent = card.recent;
   if (recent.length < 3 || recent[2].at - recent[0].at < 20 * 60_000 ||
       recent.some(p => now - p.at > 60 * 60_000)) return {reason: 'needs_three_fresh_observations'};
-  const h = hourly(card, now);
-  // Three prior complete 24-hour windows, each with >=18 hourly observations.
-  const days = [0, 1, 2].map(i => h.filter(p => p.at >= now - (i + 1) * DAY && p.at < now - i * DAY));
-  if (days.some(d => d.length < 18)) return {reason: 'needs_three_days_history'};
+  // Allow one partially observed day, while requiring 75% overall coverage.
+  const {h, days, hours, total, partialDays, usable} = historyCoverage(card, now);
+  if (!usable) return {reason: 'needs_three_days_history'};
   const medians = days.map(d => median(d.map(p => p.price)));
   if (medians[0] < medians[1] * 0.97 || medians[1] < medians[2] * 0.97)
     return {reason: 'declining_trend'};
@@ -147,13 +155,22 @@ export function evaluate(card, now) {
   // Count distinct dip -> recovery episodes, with >=2 later hourly readings at target.
   // A 12-hour search limit avoids counting an unrelated recovery days later.
   let episodes = 0, lastEnd = -Infinity;
+  const dipCeiling = Math.min(low * 1.025, typical * 0.94, entry * 1.025);
   for (let i = 0; i < h.length; i++) {
-    if (h[i].at <= lastEnd || h[i].price > low * 1.025) continue;
-    const recovery = h.slice(i + 1).filter(p => p.at <= h[i].at + 12 * HOUR && p.price >= target);
+    if (h[i].at <= lastEnd || h[i].price > dipCeiling) continue;
+    // A gap cannot establish what happened in between: end this episode at a gap.
+    const observed = [];
+    let previousAt = h[i].at;
+    for (const p of h.slice(i + 1)) {
+      if (p.at > h[i].at + 12 * HOUR || p.at - previousAt > 3 * HOUR) break;
+      observed.push(p); previousAt = p.at;
+    }
+    const recovery = observed.filter(p => p.price >= target);
     if (recovery.length >= 2) { episodes++; lastEnd = recovery[1].at; }
   }
   if (episodes < 3) return {reason: 'insufficient_repeated_recoveries'};
-  return {reason: 'candidate', entry, target, net, margin: net / entry, episodes};
+  return {reason: 'candidate', entry, target, net, margin: net / entry, episodes,
+    historyQuality: partialDays ? 'one_partial_day' : 'complete', observedHours: hours, totalObservedHours: total};
 }
 
 export function scan(state, rows, now = Date.now()) {
@@ -178,13 +195,18 @@ export function scan(state, rows, now = Date.now()) {
     if (!paused && result.reason === 'candidate') candidates.push({id: card.id, name: card.name, rating: card.rating,
       rarity: card.rarity, sourceAt: card.at, ...result});
   }
-  const signals = candidates.sort((a, b) => b.episodes - a.episodes || b.margin - a.margin).slice(0, 5);
+  const signals = candidates.sort((a, b) => Number(a.historyQuality === 'one_partial_day') - Number(b.historyQuality === 'one_partial_day') ||
+    b.episodes - a.episodes || b.margin - a.margin).slice(0, 5);
   for (const signal of signals) {
     state.cards[signal.id].lastAlert = now;
     state.calls.push({...signal, status: 'open', createdAt: now, expiresAt: now + 12 * HOUR});
   }
   state.calls = state.calls.filter(c => c.createdAt >= now - 7 * DAY);
+  const coverageChecks = cards.map(c => historyCoverage(c, now));
   return {at: new Date(now).toISOString(), mode: 'private_bin_test', tracked: state.ids.length, fresh: cards.length,
+    historyCoverage: {usableCards: coverageChecks.filter(c => c.usable).length,
+      usableWithPartialDay: coverageChecks.filter(c => c.usable && c.partialDays === 1).length,
+      medianHoursByDay: [0, 1, 2].map(i => median(coverageChecks.map(c => c.hours[i])))},
     paused, pauseReason: !coverage ? 'insufficient_fresh_coverage' : !market.covered ? 'market_history_warming_up' :
       now < state.pauseUntil ? 'market_drop_cooldown' : null, market, reasons, signals, outcomes,
     disclaimer: 'BIN observations only; target observed does not mean a completed sale or realised profit.'};

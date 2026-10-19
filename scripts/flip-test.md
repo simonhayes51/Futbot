@@ -64,7 +64,9 @@ working directory; keep it outside Git. State is separated by year and platform.
 
 ## Rules being tested (unvalidated starting thresholds)
 
-Require three prior 24-hour windows with at least 18 observed hours each. These
+Require at least 54 observed hours across the last 72 hours, at least 12 in each
+24-hour window, and at least 18 in two of the three windows. This allows one
+partial day without discarding otherwise useful history. These observations
 come from existing database history on the first run, rather than waiting days
 to collect them. Cards lacking enough existing data are skipped with an explicit
 reason while new observations accumulate. Recent confirmation observations are
@@ -77,6 +79,10 @@ near the historical lower quintile, at least 6% below the typical price. Ignore
 isolated spikes, large discontinuities and unstable dips. Reject a >3% fall in
 either successive daily median. Require at least three separate historical dips
 followed by two hourly observations at the target within 12 hours.
+An episode stops at an observation gap longer than three hours, so a missing
+period cannot establish a recovery. Candidates using one partial day are labelled
+`one_partial_day` and ranked below candidates with all three days well covered.
+This is a data-coverage adjustment, not evidence that predictive accuracy improved.
 
 Target is the weakest of the three daily upper quartiles, minus a 2% buffer.
 Entry uses the highest of the three confirmation prices. Deduct 5% tax; require
@@ -100,7 +106,7 @@ original quote age: fix that upstream rather than treating repeated prices as pr
 
 Each run prints JSON to private service logs and replaces `latest.json`. `state.json`
 contains seven days of bounded history and calls, under `<FLIP_TEST_DIR>/<year>-<platform>`.
-Check `historyLoaded`, `paused`, `pauseReason`, `market`, rejection `reasons`,
+Check `historyLoaded`, `historyCoverage`, `paused`, `pauseReason`, `market`, rejection `reasons`,
 `signals` and `outcomes`. Reasons are calculated even when market checks pause
 signals, so missing history and weak patterns can be diagnosed immediately.
 Calls expire after 12 hours. `target_observed` requires two later fresh readings at

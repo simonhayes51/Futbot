@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory} from './flip-test.mjs';
+import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage} from './flip-test.mjs';
 
 const H = 3_600_000, now = Date.UTC(2026, 9, 19, 12);
 function card() {
@@ -149,4 +149,34 @@ test('seeded data cannot invent missing history or accept future/invalid rows', 
   const c = {...state.cards['1'], name: 'A', rating: 87, price: 92_000, at: now,
     recent: card().recent};
   assert.equal(evaluate(c, now).reason, 'needs_three_days_history');
+});
+test('observed 22/12/23-hour feed coverage is usable; thin and multiple partial days fail', () => {
+  const c = card();
+  function keepHours(counts) {
+    return {...c, history: counts.flatMap((n, i) => c.history.filter(p =>
+      p.at >= now - (i + 1) * 24 * H && p.at < now - i * 24 * H).slice(-n)).sort((a, b) => a.at - b.at)};
+  }
+  const partial = keepHours([22, 12, 23]);
+  assert.deepEqual(historyCoverage(partial, now).hours, [22, 12, 23]);
+  assert.equal(historyCoverage(partial, now).usable, true);
+  const result = evaluate(partial, now);
+  assert.equal(result.reason, 'candidate');
+  assert.equal(result.historyQuality, 'one_partial_day');
+  assert.equal(result.totalObservedHours, 57);
+  for (const counts of [[22, 11, 23], [17, 17, 23], [18, 12, 18], [4, 12, 23]]) {
+    assert.equal(historyCoverage(keepHours(counts), now).usable, false);
+    assert.equal(evaluate(keepHours(counts), now).reason, 'needs_three_days_history');
+  }
+});
+test('unobserved gaps cannot be counted as repeated recovery episodes', () => {
+  const c = card();
+  // Three hours of low observations followed by a five-hour gap before highs.
+  // Coverage still passes, but none of these isolated lows proves a recovery.
+  c.history = [];
+  for (let d = 0; d < 4; d++) for (let hour = 0; hour < 24; hour++) {
+    if (hour >= 3 && hour < 7) continue;
+    c.history.push({at: now - (4 - d) * 24 * H + hour * H, values: [hour < 3 ? 92_000 : 106_000]});
+  }
+  assert.equal(historyCoverage(c, now).usable, true);
+  assert.equal(evaluate(c, now).reason, 'insufficient_repeated_recoveries');
 });
