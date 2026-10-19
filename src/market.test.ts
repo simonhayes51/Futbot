@@ -36,6 +36,7 @@ test('market query uses successful check timestamps and loads the latest unchang
  await new MarketService(prices,'ps5',15).snapshot();
  assert.match(statement,/p\.price_checked_at/);
  assert.match(statement,/p\.last_price_status/);
+ assert.match(statement,/CASE WHEN \$2='ps5'/);
  assert.doesNotMatch(statement,/h\.captured_at>=now\(\)/);
 });
 test('market query does not filter on unpopulated tradeability metadata',async()=>{let statement='';const prices:any={year:27,pool:{query:async(sql:string)=>{statement=sql;return {rows:[]};}}};await new MarketService(prices,'ps5',15).snapshot();assert.doesNotMatch(statement,/is_tradeable/);});
