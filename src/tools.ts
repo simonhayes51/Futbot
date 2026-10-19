@@ -38,7 +38,8 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
     const card=await market.prices.card(entry.id);
     const price=card?await market.prices.latest(card.id,selectedPlatform):null;
     const fresh=!!price&&isFresh(price.capturedAt,market.maxAge);
-    return `• ${card?`${card.name} · ${card.rating??'—'} OVR`:`Card ${entry.id}`} (${entry.reason}) · ${fresh?coins(price!.value)+' coins':'no fresh price'}`;
+    const priceLabel=fresh?coins(price!.value)+' coins':price?`stale · last seen <t:${Math.floor(price.capturedAt.getTime()/1000)}:R>`:'no price data';
+    return `• ${card?`${card.name} · ${card.rating??'—'} OVR`:`Card ${entry.id}`} (${entry.reason}) · ${priceLabel}`;
    }));
    const cost=evo.coinsCost!==null?coins(evo.coinsCost)+' coins':evo.pointsCost!==null?evo.pointsCost+' points':'cost not listed';
    const date=Math.floor(Date.parse(evo.closesAt)/1000);
@@ -51,9 +52,10 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
   const context=await fetchFutggContext(year),rows=context.gallery.filter(row=>row.coinsPerToken!==null).slice(0,8);
   if(!rows.length){await i.editReply({embeds:[brand().setTitle('🏆 GALLERY DATA UNAVAILABLE').setDescription('FUT.GG returned no Gallery tiers with a positive cost and token reward.')]});return;}
   const lines=await Promise.all(rows.map(async row=>{
-   const cards=await Promise.all(row.cardIds.slice(0,3).map(id=>market.prices.card(id)));
-   const names=cards.filter(Boolean).map(card=>card!.name).join(', ');
-   return `**${row.name} · ${row.grade}**\n${row.cost===null?'Cost missing':coins(row.cost)+' coins'} / ${row.tokens??'—'} tokens = **${coins(row.coinsPerToken!)} per token**\n${row.itemCount} cards${names?` · ${names}`:''}`;
+   const cards=await Promise.all(row.cardIds.map(id=>market.prices.card(id)));
+   const named=cards.filter((card):card is Card=>!!card&&!!card.name?.trim()&&!/^unknown(?: card| player)?$/i.test(card.name.trim()));
+   const names=named.slice(0,3).map(card=>card.name).join(', '),unresolved=Math.max(0,row.itemCount-named.length);
+   return `**${row.name} · ${row.grade}**\n${row.cost===null?'Cost missing':coins(row.cost)+' coins'} / ${row.tokens??'—'} tokens = **${coins(row.coinsPerToken!)} per token**\n${row.itemCount} cards${names?` · ${names}`:''}${unresolved?` · ${unresolved} names unavailable`:''}`;
   }));
   const embed=brand().setTitle('🏆 GALLERY VALUE').setDescription(lines.join('\n\n').slice(0,4000)).addFields({name:'HOW TO READ THIS',value:'Ranked by listed Gallery cost per token. Card names are examples from the tier lineup. Check the in-game requirements and current prices before spending.'});
   await i.editReply({embeds:[embed]});return;
