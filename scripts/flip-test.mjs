@@ -52,6 +52,57 @@ function hourly(card, now) {
     .map(p => ({at: p.at, price: median(p.values.filter(v => Number.isFinite(v) && v > 0))}));
 }
 
+// Seed only selected cards, using bounded batches of hourly aggregates. This also
+// upgrades existing test state; a per-card marker prevents repeated backfills.
+export function seedHistory(state, ids, rows, now) {
+  for (const id of ids) {
+    const card = state.cards[id] ??= {history: [], recent: [], lastAlert: 0};
+    const hours = new Map(card.history.map(p => [p.at, p]));
+    const recent = new Map(card.recent.map(p => [p.at, p]));
+    for (const row of rows.filter(r => String(r.id) === id)) {
+      const at = new Date(row.at).getTime(), price = Number(row.price);
+      if (!Number.isFinite(at) || !Number.isFinite(price) || price <= 0 || at > now) continue;
+      if (row.kind === 'hour' && at < Math.floor(now / HOUR) * HOUR && at >= now - 7 * DAY)
+        hours.set(at, {at, values: [price]});
+      if (row.kind === 'recent' && at >= now - HOUR) recent.set(at, {at, price});
+    }
+    card.history = [...hours.values()].filter(p => p.at >= now - 7 * DAY).sort((a, b) => a.at - b.at);
+    card.recent = [...recent.values()].filter(p => p.at >= now - HOUR).sort((a, b) => a.at - b.at).slice(-3);
+    card.historySeededAt = now;
+  }
+}
+
+function historyTable(platform) {
+  if (platform === 'ps5') return 'public.futgg_bin_history';
+  if (platform === 'pc') return 'public.futbot_pc_bin_history';
+  throw new Error('PLATFORM must be ps5 or pc');
+}
+
+export function historySQL(platform) {
+  const table = historyTable(platform);
+  return `SELECT p.source_card_id::text AS id,'hour' AS kind,h.at,h.price
+    FROM public.futgg_players p JOIN LATERAL (
+      SELECT date_trunc('hour',captured_at) AS at,
+        percentile_cont(0.5) WITHIN GROUP(ORDER BY lowest_bin) AS price
+      FROM ${table} WHERE source_card_id=p.source_card_id AND game_year=$1 AND platform=$2
+        AND lowest_bin>0 AND captured_at>=date_trunc('hour',$4::timestamptz)-interval '7 days'
+        AND captured_at<date_trunc('hour',$4::timestamptz)
+      GROUP BY 1
+    ) h ON true WHERE p.game_year=$1 AND p.source_card_id::text=ANY($3::text[])
+    UNION ALL
+    SELECT p.source_card_id::text AS id,'recent' AS kind,h.captured_at AS at,h.lowest_bin AS price
+    FROM public.futgg_players p JOIN LATERAL (
+      SELECT captured_at,lowest_bin FROM (
+        SELECT DISTINCT ON (date_bin(interval '15 minutes',captured_at,timestamptz '2000-01-01'))
+          captured_at,lowest_bin,id
+        FROM ${table} WHERE source_card_id=p.source_card_id AND game_year=$1 AND platform=$2
+          AND lowest_bin>0 AND captured_at >= $4::timestamptz-interval '1 hour'
+          AND captured_at <= $4::timestamptz
+        ORDER BY date_bin(interval '15 minutes',captured_at,timestamptz '2000-01-01') DESC,captured_at DESC,id DESC
+      ) slots ORDER BY captured_at DESC,id DESC LIMIT 3
+    ) h ON true WHERE p.game_year=$1 AND p.source_card_id::text=ANY($3::text[])`;
+}
+
 export function marketCheck(cards, now) {
   const changes = [];
   for (const card of cards) {
@@ -121,10 +172,10 @@ export function scan(state, rows, now = Date.now()) {
     if (call.status !== 'open') outcomes.push({...call});
   }
   const reasons = {}, candidates = [];
-  if (!paused) for (const card of cards) {
+  for (const card of cards) {
     const result = evaluate(card, now);
     reasons[result.reason] = (reasons[result.reason] ?? 0) + 1;
-    if (result.reason === 'candidate') candidates.push({id: card.id, name: card.name, rating: card.rating,
+    if (!paused && result.reason === 'candidate') candidates.push({id: card.id, name: card.name, rating: card.rating,
       rarity: card.rarity, sourceAt: card.at, ...result});
   }
   const signals = candidates.sort((a, b) => b.episodes - a.episodes || b.margin - a.margin).slice(0, 5);
@@ -140,8 +191,7 @@ export function scan(state, rows, now = Date.now()) {
 }
 
 export function snapshotSQL(platform) {
-  const table = platform === 'ps5' ? 'public.futgg_bin_history' : platform === 'pc' ? 'public.futbot_pc_bin_history' : null;
-  if (!table) throw new Error('PLATFORM must be ps5 or pc');
+  const table = historyTable(platform);
   return `SELECT p.source_card_id::text AS id, COALESCE(p.display_name,p.name,p.full_name) AS name,
     p.rating,p.rarity,l.lowest_bin AS price,l.captured_at AS at
     FROM public.futgg_players p JOIN LATERAL (
@@ -188,13 +238,28 @@ async function main() {
     const tick = async () => {
       const now = Date.now();
       const discover = now - state.selectedAt >= DAY || !state.ids.length;
-      const {rows} = await pool.query(sql, [year, platform, discover ? null : state.ids, cap]);
+      let {rows} = await pool.query(sql, [year, platform, discover ? null : state.ids, cap]);
       if (discover && rows.length >= 20) {
         state.ids = rows.map(r => String(r.id)); state.selectedAt = now;
         const retained = new Set([...state.ids, ...state.calls.filter(c => c.status === 'open').map(c => c.id)]);
         for (const id of Object.keys(state.cards)) if (!retained.has(id)) delete state.cards[id];
       }
+      const unseeded = rows.map(r => String(r.id)).filter(id => {
+        const card = state.cards[id];
+        return !card?.historySeededAt || (card.history.at(-1)?.at ?? card.historySeededAt) < now - DAY;
+      });
+      let historyRows = 0;
+      for (let i = 0; i < unseeded.length; i += 20) {
+        const ids = unseeded.slice(i, i + 20);
+        const loaded = await pool.query(historySQL(platform), [year, platform, ids, new Date(now)]);
+        seedHistory(state, ids, loaded.rows, now);
+        historyRows += loaded.rows.length;
+        console.error(`Flip test history loaded: ${Math.min(i + 20, unseeded.length)}/${unseeded.length} cards`);
+      }
+      // Backfill can take time: use a fresh snapshot for the first decision.
+      if (unseeded.length) ({rows} = await pool.query(sql, [year, platform, state.ids.length ? state.ids : rows.map(r => String(r.id)), cap]));
       const report = scan(state, rows, Date.now());
+      report.historyLoaded = {cards: unseeded.length, rows: historyRows};
       // State includes signals/outcomes for seven days, avoiding an unbounded log.
       await atomicJSON(file, state);
       await atomicJSON(resolve(directory, 'latest.json'), report);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL} from './flip-test.mjs';
+import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory} from './flip-test.mjs';
 
 const H = 3_600_000, now = Date.UTC(2026, 9, 19, 12);
 function card() {
@@ -79,6 +79,7 @@ test('expired calls do not count targets first observed after expiry', () => {
 });
 test('query only permits supported tables and parameterises filters', () => {
   assert.throws(() => snapshotSQL('anything_else'));
+  assert.throws(() => historySQL('anything_else'));
   assert.match(snapshotSQL('pc'), /public\.futbot_pc_bin_history/);
   assert.match(snapshotSQL('ps5'), /l\.lowest_bin>20000 OR p\.rating>85/);
 });
@@ -102,5 +103,50 @@ test('snapshot SQL selects fresh eligible latest prices and limits subsequent re
     assert.equal(Number(discovered.rows.find(r => r.id === '2').price), 20001);
     const tracked = await db.query(snapshotSQL('ps5'), [27, 'ps5', ['1', '2'], 300]);
     assert.deepEqual(tracked.rows.map(r => r.id).sort(), ['1', '2']);
+    await db.exec(`INSERT INTO futgg_bin_history(source_card_id,game_year,platform,lowest_bin,captured_at) VALUES
+      (2,27,'ps5',21000,now()-interval '16 minutes'),(2,27,'ps5',22000,now()-interval '31 minutes'),
+      (2,27,'ps5',23000,now()-interval '46 minutes'),(2,27,'ps5',100,now()+interval '1 hour'),
+      (2,27,'ps5',100,now()-interval '8 days'),(2,26,'ps5',100,now()-interval '2 hours'),
+      (2,27,'pc',100,now()-interval '2 hours'),(2,27,'ps5',30000,now()-interval '2 hours'),
+      (2,27,'ps5',50000,now()-interval '2 hours');`);
+    const asOf = new Date();
+    const seeded = await db.query(historySQL('ps5'), [27, 'ps5', ['2'], asOf]);
+    assert.ok(seeded.rows.every(r => r.id === '2'));
+    const recent = seeded.rows.filter(r => r.kind === 'recent');
+    assert.equal(recent.length, 3);
+    assert.deepEqual(recent.map(r => Number(r.price)), [20001, 21000, 22000]);
+    assert.ok(seeded.rows.some(r => r.kind === 'hour' && Number(r.price) === 40000));
+    assert.equal((await db.query(historySQL('ps5'), [27, 'ps5', [], asOf])).rows.length, 0);
   } finally {await db.close();}
+});
+test('existing history enables first-run signals without waiting or resetting cooldowns', () => {
+  const state = emptyState(); state.ids = Array.from({length: 30}, (_, i) => String(i));
+  const history = state.ids.flatMap(id => {
+    const c = card();
+    return [...c.history.map(p => ({id, kind: 'hour', at: p.at, price: p.values[0]})),
+      ...c.recent.map(p => ({id, kind: 'recent', at: p.at, price: Number(id) < 10 ? p.price : 106_000}))];
+  });
+  seedHistory(state, state.ids, history, now);
+  const rows = state.ids.map(id => ({id, name: 'Example', rating: 87, price: Number(id) < 10 ? 92_000 : 106_000, at: now - 60_000}));
+  const report = scan(state, rows, now);
+  assert.equal(report.paused, false);
+  assert.equal(report.signals.length, 5);
+  const call = state.calls[0], lastAlert = state.cards[call.id].lastAlert;
+  seedHistory(state, state.ids, history, now);
+  assert.equal(state.cards[call.id].lastAlert, lastAlert);
+  assert.equal(state.cards[call.id].history.length, 96);
+  assert.equal(state.cards[call.id].recent.length, 3);
+  assert.equal(state.calls[0], call);
+});
+test('seeded data cannot invent missing history or accept future/invalid rows', () => {
+  const state = emptyState();
+  seedHistory(state, ['1'], [{id: '1', kind: 'hour', at: now + H, price: 100},
+    {id: '1', kind: 'recent', at: now - 60_000, price: -100},
+    {id: '1', kind: 'hour', at: now - 8 * 24 * H, price: 100}], now);
+  assert.equal(state.cards['1'].history.length, 0);
+  assert.equal(state.cards['1'].recent.length, 0);
+  assert.ok(state.cards['1'].historySeededAt);
+  const c = {...state.cards['1'], name: 'A', rating: 87, price: 92_000, at: now,
+    recent: card().recent};
+  assert.equal(evaluate(c, now).reason, 'needs_three_days_history');
 });

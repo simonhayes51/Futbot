@@ -29,12 +29,12 @@ FLIP_TEST_DIR=/data/flip-test
 ```
 
 Mount a persistent volume at `/data/flip-test` on Coolify/Railway. Without a volume,
-redeployments can lose history and restart warm-up. Default is `.flip-test` in the
+redeployments can lose history and trigger another initial history load. Default is `.flip-test` in the
 working directory; keep it outside Git. State is separated by year and platform.
 
 ## Cost and scope
 
-- One read-only, eight-second-timeout SQL query per check (96/day), one connection.
+- One read-only, eight-second-timeout SQL query per routine check (96/day), one connection.
 - Once a day, discover eligible cards: current BIN **strictly above 20,000 OR rating
   strictly above 85** (86+). A stable hash selects up to 300 to bound cost; this
   test samples the eligible universe and does not monitor every qualifying card.
@@ -43,8 +43,18 @@ working directory; keep it outside Git. State is separated by year and platform.
   cards can take up to a day to enter the sample. Keep selected cards in the basket
   until next discovery even if their price falls through 20k; new signals always
   require the filter to pass at that moment.
-- Fetch only latest stored prices, never scan/reload the full historical table.
-  Build a local seven-day history of hourly medians plus three recent observations.
+- On first use, load up to seven days of existing history for selected cards only,
+  in sequential batches of 20. Each query aggregates hours in the database and
+  returns at most 168 hourly points plus three recent 15-minute-slot observations
+  per card. No full-table export or browser scraping.
+- Refresh the latest snapshot after loading history, then assess candidates in that
+  same run. With sufficient existing data, the first run can produce signals.
+- A per-card marker avoids repeating the load on routine checks or restarts.
+  Newly selected cards are seeded when discovered; after a gap of more than a day
+  in stored local history, the card is seeded again. Existing old-version state is
+  upgraded automatically. Missing database history is never fabricated.
+- After seeding, build local hourly medians plus three recent observations from
+  the latest stored prices. Preserve the state volume to avoid unnecessary loads.
 - State and call records are pruned to seven days. No generated charts or images.
 - A candidate log is capped at five per check and one per card per 24 hours.
 - Daily discovery still probes active cards. Existing lookup indexes are important:
@@ -54,9 +64,13 @@ working directory; keep it outside Git. State is separated by year and platform.
 
 ## Rules being tested (unvalidated starting thresholds)
 
-No candidates during warm-up: require three prior 24-hour windows with at least
-18 observed hours each. Realistically allow 3–4 days with a healthy price feed.
-No historical backfill is performed to keep startup cheap.
+Require three prior 24-hour windows with at least 18 observed hours each. These
+come from existing database history on the first run, rather than waiting days
+to collect them. Cards lacking enough existing data are skipped with an explicit
+reason while new observations accumulate. Recent confirmation observations are
+also seeded from the last hour, so they do not require a new polling cycle when
+the stored feed already has enough fresh points. First-run execution time depends
+on database size/indexes and the selected cap; live cost has not been measured.
 
 Require three distinct timestamped fresh observations spanning at least 20 minutes,
 near the historical lower quintile, at least 6% below the typical price. Ignore
@@ -86,7 +100,9 @@ original quote age: fix that upstream rather than treating repeated prices as pr
 
 Each run prints JSON to private service logs and replaces `latest.json`. `state.json`
 contains seven days of bounded history and calls, under `<FLIP_TEST_DIR>/<year>-<platform>`.
-Check `paused`, `pauseReason`, `market`, rejection `reasons`, `signals` and `outcomes`.
+Check `historyLoaded`, `paused`, `pauseReason`, `market`, rejection `reasons`,
+`signals` and `outcomes`. Reasons are calculated even when market checks pause
+signals, so missing history and weak patterns can be diagnosed immediately.
 Calls expire after 12 hours. `target_observed` requires two later fresh readings at
 or above the target, at least ten minutes apart, before expiry. It is **not** a
 completed sale or realised profit. Missing/stale data cannot prove trade failure;
@@ -108,4 +124,6 @@ node --test scripts/flip-test.test.mjs
 
 Tests cover eligibility boundaries, repeatable recoveries, outliers, stale and
 duplicate observations, falling trends, broad crash pauses, deduplication, and
-target expiry. They use synthetic data and do not establish trading accuracy.
+target expiry. Backfill tests execute its SQL against a test database and verify
+first-run signals, preserved cooldowns, and missing/invalid data handling. Tests
+use synthetic data and do not establish trading accuracy.
