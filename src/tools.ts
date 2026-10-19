@@ -1,4 +1,4 @@
-import {SlashCommandBuilder,AttachmentBuilder,ActionRowBuilder,StringSelectMenuBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,type ChatInputCommandInteraction} from 'discord.js';
+import {SlashCommandBuilder,AttachmentBuilder,ActionRowBuilder,StringSelectMenuBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,type ChatInputCommandInteraction,type StringSelectMenuInteraction} from 'discord.js';
 import type {MarketService,MarketCard} from './market.js';
 import {fodderRows,movers} from './market.js';
 import {fodderBoard,consumablesBoard,rankConsumables} from './boards.js';
@@ -6,7 +6,7 @@ import {watch,watchedMarkets,guildSettings} from './settings.js';
 import type {AlertRepository} from './alerts.js';
 import type {Card} from './domain.js';
 import {coins,isFresh} from './domain.js';
-import {fetchFutggContext} from './futgg-context.js';
+import {fetchFutggContext,type GalleryValue} from './futgg-context.js';
 const player=(o:any)=>o.setName('player').setDescription('Choose an exact card').setRequired(true).setAutocomplete(true);
 export const extraCommands=[
  new SlashCommandBuilder().setName('fodder').setDescription('🧱 Cheapest fresh cards by rating, with a visual price ladder'),
@@ -25,40 +25,48 @@ export const extraCommands=[
  new SlashCommandBuilder().setName('help').setDescription('📖 All FutBot tools and how to use them')
 ];
 export function cardLines(cards:MarketCard[]){return cards.slice(0,10).map((c,i)=>`**${String(i+1).padStart(2,'0')} · ${c.name.replace(/[*_`~|\\]/g,'')}** · ${c.rating??'—'} ${c.position??''}\n🪙 **${coins(c.value)}**${c.change===null?'':` · ${c.change>=0?'📈 +':'📉 '}${c.change.toFixed(1)}%`}`).join('\n\n')||'No fresh prices match. Try a different filter or check the collector.';}
+export async function handleFutggSelect(i:StringSelectMenuInteraction,market:MarketService,brand:(pricePlatform?:string)=>EmbedBuilder){
+ const [kind,platform='ps5']=i.customId.split(':').slice(1);
+ const context=await fetchFutggContext(market.prices.year);
+ if(kind==='evolution'){
+  const evo=context.evolutions.find(row=>row.id===i.values[0]);
+  if(!evo)throw new Error('That Evolution is no longer open. Run /evolutions again.');
+  const eligible=new Set(evo.eligibleCardIds),fresh=(await market.snapshot()).filter(card=>eligible.has(card.id)).sort((a,b)=>a.value-b.value).slice(0,8);
+  const lines=fresh.length?fresh.map(card=>`• **${card.name} · ${card.rating??'—'} OVR** — ${coins(card.value)} coins`):await Promise.all(evo.eligibleCardIds.slice(0,8).map(async id=>{const card=await market.prices.card(id);return `• ${card?.name&&!/^unknown(?: card| player)?$/i.test(card.name)?`${card.name} · ${card.rating??'—'} OVR`:`Card ${id}`} — no fresh price`;}));
+  const close=Math.floor(Date.parse(evo.closesAt)/1000),cost=evo.coinsCost!==null?coins(evo.coinsCost)+' coins':evo.pointsCost!==null?evo.pointsCost+' points':'cost not listed';
+  const note=fresh.length?'Cheapest eligible cards with fresh prices.':'No fresh eligible-card prices are available right now; these are examples from the eligibility list.';
+  await i.update({embeds:[brand(platform).setTitle('🧬 '+evo.name).setDescription(`${cost} · closes <t:${close}:R>\n\n${lines.join('\n')}\n\n${note}`).addFields({name:'ELIGIBILITY',value:`${evo.eligibleCardIds.length} cards listed as eligible by FUT.GG. Trending cards are excluded unless FUT.GG marks them eligible.`})],components:[]});return;
+ }
+ if(kind==='gallery'){
+  const tiers=context.gallery.filter(row=>row.setId===i.values[0]&&row.coinsPerToken!==null).sort((a,b)=>a.coinsPerToken!-b.coinsPerToken!);
+  if(!tiers.length)throw new Error('That Gallery set is no longer available. Run /gallery again.');
+  const lines=await Promise.all(tiers.slice(0,8).map(async row=>{
+   const cards=await Promise.all(row.cardIds.map(id=>market.prices.card(id)));
+   const names=cards.filter((card):card is Card=>!!card&&!!card.name?.trim()&&!/^unknown(?: card| player)?$/i.test(card.name.trim())).slice(0,3).map(card=>card.name).join(', ');
+   return `**${row.grade}** · ${coins(row.cost??0)} coins / ${row.tokens??'—'} tokens = **${coins(row.coinsPerToken!)} per token**${names?`\nExamples: ${names}`:''}`;
+  }));
+  await i.update({embeds:[brand().setTitle('🏆 '+tiers[0].name).setDescription(lines.join('\n\n')).addFields({name:'BEST VALUE',value:`${tiers[0].grade} is the lowest listed cost per token. Check the in-game requirements and card prices before spending.`})],components:[]});return;
+ }
+ await i.deferUpdate();
+}
 export async function handleTool(i:ChatInputCommandInteraction,market:MarketService,repo:AlertRepository,brand:(pricePlatform?:string)=>EmbedBuilder,resolve:(id:string)=>Promise<Card>,limits={watch:20}){
  const year=market.prices.year,platform=market.platform;
  if(i.commandName==='evolutions'){
   const selectedPlatform=i.options.getString('market')??platform;
   if(!['ps5','pc'].includes(selectedPlatform))throw new Error('Choose Console or PC.');
-  const context=await fetchFutggContext(year),rows=context.evolutions.slice(0,7);
+  const context=await fetchFutggContext(year),rows=context.evolutions.slice(0,25);
   if(!rows.length){await i.editReply({embeds:[brand().setTitle('🧬 NO OPEN EVOLUTIONS').setDescription('FUT.GG currently lists no open Evolutions for this game year.')]});return;}
-  const lines=await Promise.all(rows.map(async evo=>{
-   const ids=[...evo.eligibleCardIds.slice(0,2).map(id=>({id,reason:'eligible'})),...evo.trendingCardIds.slice(0,1).map(id=>({id,reason:'trending'}))];
-   const candidates=await Promise.all(ids.map(async entry=>{
-    const card=await market.prices.card(entry.id);
-    const price=card?await market.prices.latest(card.id,selectedPlatform):null;
-    const fresh=!!price&&isFresh(price.capturedAt,market.maxAge);
-    const priceLabel=fresh?coins(price!.value)+' coins':price?`stale · last seen <t:${Math.floor(price.capturedAt.getTime()/1000)}:R>`:'no price data';
-    return `• ${card?`${card.name} · ${card.rating??'—'} OVR`:`Card ${entry.id}`} (${entry.reason}) · ${priceLabel}`;
-   }));
-   const cost=evo.coinsCost!==null?coins(evo.coinsCost)+' coins':evo.pointsCost!==null?evo.pointsCost+' points':'cost not listed';
-   const date=Math.floor(Date.parse(evo.closesAt)/1000);
-   return `**${evo.name}** · ${cost} · closes <t:${date}:R>\n${candidates.join('\n')||'No card candidates listed'} · ${evo.eligibleCardIds.length} eligible listed`;
-  }));
-  const embed=brand(selectedPlatform).setTitle('🧬 OPEN EVOLUTIONS').setDescription(lines.join('\n\n').slice(0,4000)).addFields({name:'PRICE CHECK',value:'Prices come from Futbot’s existing price feed and are labelled when fresh. Trending cards are not confirmed as eligible.'});
-  await i.editReply({embeds:[embed]});return;
+  const choices=rows.map(evo=>({label:evo.name.slice(0,100),description:`${evo.eligibleCardIds.length} eligible cards · closes ${new Date(evo.closesAt).toLocaleDateString('en-GB')}`.slice(0,100),value:evo.id}));
+  const menu=new StringSelectMenuBuilder().setCustomId('futgg:evolution:'+selectedPlatform).setPlaceholder('Choose an Evolution to see the best eligible cards').addOptions(choices);
+  await i.editReply({embeds:[brand(selectedPlatform).setTitle('🧬 CHOOSE AN EVOLUTION').setDescription('Pick an Evolution below. FutBot will show its cheapest eligible cards with fresh prices, where available.')],components:[new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)]});return;
  }
  if(i.commandName==='gallery'){
-  const context=await fetchFutggContext(year),rows=context.gallery.filter(row=>row.coinsPerToken!==null).slice(0,8);
-  if(!rows.length){await i.editReply({embeds:[brand().setTitle('🏆 GALLERY DATA UNAVAILABLE').setDescription('FUT.GG returned no Gallery tiers with a positive cost and token reward.')]});return;}
-  const lines=await Promise.all(rows.map(async row=>{
-   const cards=await Promise.all(row.cardIds.map(id=>market.prices.card(id)));
-   const named=cards.filter((card):card is Card=>!!card&&!!card.name?.trim()&&!/^unknown(?: card| player)?$/i.test(card.name.trim()));
-   const names=named.slice(0,3).map(card=>card.name).join(', '),unresolved=Math.max(0,row.itemCount-named.length);
-   return `**${row.name} · ${row.grade}**\n${row.cost===null?'Cost missing':coins(row.cost)+' coins'} / ${row.tokens??'—'} tokens = **${coins(row.coinsPerToken!)} per token**\n${row.itemCount} cards${names?` · ${names}`:''}${unresolved?` · ${unresolved} names unavailable`:''}`;
-  }));
-  const embed=brand().setTitle('🏆 GALLERY VALUE').setDescription(lines.join('\n\n').slice(0,4000)).addFields({name:'HOW TO READ THIS',value:'Ranked by listed Gallery cost per token. Card names are examples from the tier lineup. Check the in-game requirements and current prices before spending.'});
-  await i.editReply({embeds:[embed]});return;
+  const context=await fetchFutggContext(year),rows=context.gallery.filter(row=>row.coinsPerToken!==null);
+  const groups=new Map<string,GalleryValue[]>();for(const row of rows)groups.set(row.setId,[...(groups.get(row.setId)??[]),row]);
+  const sets=[...groups.entries()].slice(0,25);
+  if(!sets.length){await i.editReply({embeds:[brand().setTitle('🏆 GALLERY DATA UNAVAILABLE').setDescription('FUT.GG returned no Gallery choices with a positive cost and token reward.')]});return;}
+  const menu=new StringSelectMenuBuilder().setCustomId('futgg:gallery').setPlaceholder('Choose a Gallery set to compare its best tiers').addOptions(sets.map(([setId,tiers])=>({label:tiers[0].name.slice(0,100),description:`${tiers.length} tiers · best ${coins(Math.min(...tiers.map(t=>t.coinsPerToken!)))} per token`.slice(0,100),value:setId})));
+  await i.editReply({embeds:[brand().setTitle('🏆 CHOOSE A GALLERY SET').setDescription('Pick a set below to compare its tiers and find the best token value.')],components:[new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)]});return;
  }
  if(i.commandName==='fodder'){
  const rating=i.options.getInteger('rating')??undefined,cards=await market.snapshot(),rows=fodderRows(cards,rating);
