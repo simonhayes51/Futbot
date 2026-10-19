@@ -1,0 +1,129 @@
+# Private BIN flip scanner test
+
+Runs separately from the bot. No public commands, Discord posts, AI, browser,
+sales-price dependency, database writes or schema migration. Uses the existing
+`PRICE_DATABASE_URL` data and the repository's `pg` dependency. Node 22+.
+
+## Run
+
+From the Futbot repository, with dependencies installed (`npm ci`):
+
+```bash
+node --env-file=.env scripts/flip-test.mjs --once
+node --env-file=.env scripts/flip-test.mjs
+```
+
+On a hosted service that supplies environment variables, omit `--env-file=.env`.
+The first command runs a single check. The second checks every 15 minutes.
+Alternatively schedule `--once` every 15 minutes, using the SAME persistent directory.
+Use one service/process only. Existing bot startup is not changed.
+
+Required: `PRICE_DATABASE_URL`. Existing `GAME_YEAR` (default 27) and `PLATFORM`
+(default ps5, or pc) are reused. No Discord token or APP database is needed.
+
+Optional:
+
+```dotenv
+FLIP_TEST_MAX_CARDS=300
+FLIP_TEST_DIR=/data/flip-test
+```
+
+Mount a persistent volume at `/data/flip-test` on Coolify/Railway. Without a volume,
+redeployments can lose history and trigger another initial history load. Default is `.flip-test` in the
+working directory; keep it outside Git. State is separated by year and platform.
+
+## Cost and scope
+
+- One read-only, eight-second-timeout SQL query per routine check (96/day), one connection.
+- Once a day, discover eligible cards: current BIN **strictly above 20,000 OR rating
+  strictly above 85** (86+). A stable hash selects up to 300 to bound cost; this
+  test samples the eligible universe and does not monitor every qualifying card.
+  Increase cap explicitly if needed (20–1000).
+- Between discoveries only those selected card IDs are queried. Newly qualifying
+  cards can take up to a day to enter the sample. Keep selected cards in the basket
+  until next discovery even if their price falls through 20k; new signals always
+  require the filter to pass at that moment.
+- On first use, load up to seven days of existing history for selected cards only,
+  in sequential batches of 20. Each query aggregates hours in the database and
+  returns at most 168 hourly points plus three recent 15-minute-slot observations
+  per card. No full-table export or browser scraping.
+- Refresh the latest snapshot after loading history, then assess candidates in that
+  same run. With sufficient existing data, the first run can produce signals.
+- A per-card marker avoids repeating the load on routine checks or restarts.
+  Newly selected cards are seeded when discovered; after a gap of more than a day
+  in stored local history, the card is seeded again. Existing old-version state is
+  upgraded automatically. Missing database history is never fabricated.
+- After seeding, build local hourly medians plus three recent observations from
+  the latest stored prices. Preserve the state volume to avoid unnecessary loads.
+- State and call records are pruned to seven days. No generated charts or images.
+- A candidate log is capped at five per check and one per card per 24 hours.
+- Daily discovery still probes active cards. Existing lookup indexes are important:
+  see `ops/price-market-indexes.sql`, or `ops/price-market-pc-index.sql` for PC.
+  Ask the database owner to install these if absent; the test does not create them.
+  A timeout fails the scan instead of launching heavier retries.
+
+## Rules being tested (unvalidated starting thresholds)
+
+Require three prior 24-hour windows with at least 18 observed hours each. These
+come from existing database history on the first run, rather than waiting days
+to collect them. Cards lacking enough existing data are skipped with an explicit
+reason while new observations accumulate. Recent confirmation observations are
+also seeded from the last hour, so they do not require a new polling cycle when
+the stored feed already has enough fresh points. First-run execution time depends
+on database size/indexes and the selected cap; live cost has not been measured.
+
+Require three distinct timestamped fresh observations spanning at least 20 minutes,
+near the historical lower quintile, at least 6% below the typical price. Ignore
+isolated spikes, large discontinuities and unstable dips. Reject a >3% fall in
+either successive daily median. Require at least three separate historical dips
+followed by two hourly observations at the target within 12 hours.
+
+Target is the weakest of the three daily upper quartiles, minus a 2% buffer.
+Entry uses the highest of the three confirmation prices. Deduct 5% tax; require
+at least 1,500 coins and 5% estimated net return. These are experiment settings,
+not proven success probabilities or promises of executable prices.
+
+Market guard uses equal-weight card percentage changes against their prior
+1–3 hour observations. Pause for two hours when median fall is at least 4% and
+60% of the matched sample falls at least 4%. Require at least 20 matched cards,
+70% historical market coverage and 80% fresh coverage of the selected basket.
+Insufficient coverage also pauses calls. This detects broad moves in the monitored
+sample; category-only crashes, unexpected events and slow declines can escape it.
+It cannot anticipate leaks/news. Stop the service to pause manually.
+
+Source freshness uses `captured_at`, the timestamp currently exposed by Futbot's
+price tables. Duplicate timestamps never count as new observations. If an upstream
+worker inserts old quotes with new capture times, this script cannot establish the
+original quote age: fix that upstream rather than treating repeated prices as proof.
+
+## Results
+
+Each run prints JSON to private service logs and replaces `latest.json`. `state.json`
+contains seven days of bounded history and calls, under `<FLIP_TEST_DIR>/<year>-<platform>`.
+Check `historyLoaded`, `paused`, `pauseReason`, `market`, rejection `reasons`,
+`signals` and `outcomes`. Reasons are calculated even when market checks pause
+signals, so missing history and weak patterns can be diagnosed immediately.
+Calls expire after 12 hours. `target_observed` requires two later fresh readings at
+or above the target, at least ten minutes apart, before expiry. It is **not** a
+completed sale or realised profit. Missing/stale data cannot prove trade failure;
+`expired` means the target was not confirmed in the collected data.
+
+The script never posts to Discord, so only people with access to these private
+files/service logs can see the test. No automatic/public rollout is enabled.
+Thresholds need evaluation against the collected results before using calls live.
+
+If a process is killed abruptly, `scanner.lock` may remain. Stop/verify that no
+scanner is running, then remove that one lock file before restarting. Never delete
+a live process's lock. Malformed state fails closed; preserve it for investigation.
+
+## Verify
+
+```bash
+node --test scripts/flip-test.test.mjs
+```
+
+Tests cover eligibility boundaries, repeatable recoveries, outliers, stale and
+duplicate observations, falling trends, broad crash pauses, deduplication, and
+target expiry. Backfill tests execute its SQL against a test database and verify
+first-run signals, preserved cooldowns, and missing/invalid data handling. Tests
+use synthetic data and do not establish trading accuracy.
