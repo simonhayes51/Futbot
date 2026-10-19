@@ -55,6 +55,12 @@ working directory; keep it outside Git. State is separated by year and platform.
   upgraded automatically. Missing database history is never fabricated.
 - After seeding, build local hourly medians plus three recent observations from
   the latest stored prices. Preserve the state volume to avoid unnecessary loads.
+- After a break longer than 25 minutes, fill the missed recent history from the
+  database in batches of 20. The default catch-up spans four hours, extends with
+  longer breaks and never exceeds seven days. Old state without a last-scan marker
+  gets one four-hour refresh. Routine 15-minute checks do not repeat this read.
+  Recent confirmation samples also populate the current hourly bucket so they
+  remain available to the next hour's market comparison.
 - State and call records are pruned to seven days. No generated charts or images.
 - A candidate log is capped at five per check and one per card per 24 hours.
 - Daily discovery still probes active cards. Existing lookup indexes are important:
@@ -106,7 +112,7 @@ original quote age: fix that upstream rather than treating repeated prices as pr
 
 Each run prints JSON to private service logs and replaces `latest.json`. `state.json`
 contains seven days of bounded history and calls, under `<FLIP_TEST_DIR>/<year>-<platform>`.
-Check `historyLoaded`, `historyCoverage`, `paused`, `pauseReason`, `market`, rejection `reasons`,
+Check `historyLoaded`, `historyRefreshed`, `historyCoverage`, `paused`, `pauseReason`, `market`, rejection `reasons`,
 `signals` and `outcomes`. Reasons are calculated even when market checks pause
 signals, so missing history and weak patterns can be diagnosed immediately.
 Calls expire after 12 hours. `target_observed` requires two later fresh readings at

@@ -80,6 +80,8 @@ test('expired calls do not count targets first observed after expiry', () => {
 test('query only permits supported tables and parameterises filters', () => {
   assert.throws(() => snapshotSQL('anything_else'));
   assert.throws(() => historySQL('anything_else'));
+  assert.throws(() => historySQL('ps5', 169));
+  assert.throws(() => historySQL('ps5', '4;DROP TABLE'));
   assert.match(snapshotSQL('pc'), /public\.futbot_pc_bin_history/);
   assert.match(snapshotSQL('ps5'), /l\.lowest_bin>20000 OR p\.rating>85/);
 });
@@ -108,7 +110,8 @@ test('snapshot SQL selects fresh eligible latest prices and limits subsequent re
       (2,27,'ps5',23000,now()-interval '46 minutes'),(2,27,'ps5',100,now()+interval '1 hour'),
       (2,27,'ps5',100,now()-interval '8 days'),(2,26,'ps5',100,now()-interval '2 hours'),
       (2,27,'pc',100,now()-interval '2 hours'),(2,27,'ps5',30000,now()-interval '2 hours'),
-      (2,27,'ps5',50000,now()-interval '2 hours');`);
+      (2,27,'ps5',50000,now()-interval '2 hours'),
+      (2,27,'ps5',60000,now()-interval '3 days');`);
     const asOf = new Date();
     const seeded = await db.query(historySQL('ps5'), [27, 'ps5', ['2'], asOf]);
     assert.ok(seeded.rows.every(r => r.id === '2'));
@@ -116,6 +119,10 @@ test('snapshot SQL selects fresh eligible latest prices and limits subsequent re
     assert.equal(recent.length, 3);
     assert.deepEqual(recent.map(r => Number(r.price)), [20001, 21000, 22000]);
     assert.ok(seeded.rows.some(r => r.kind === 'hour' && Number(r.price) === 40000));
+    assert.ok(seeded.rows.some(r => r.kind === 'hour' && Number(r.price) === 60000));
+    const catchup = await db.query(historySQL('ps5', 4), [27, 'ps5', ['2'], asOf]);
+    assert.ok(catchup.rows.some(r => r.kind === 'hour' && Number(r.price) === 40000));
+    assert.ok(!catchup.rows.some(r => r.kind === 'hour' && Number(r.price) === 60000));
     assert.equal((await db.query(historySQL('ps5'), [27, 'ps5', [], asOf])).rows.length, 0);
   } finally {await db.close();}
 });
@@ -179,4 +186,18 @@ test('unobserved gaps cannot be counted as repeated recovery episodes', () => {
   }
   assert.equal(historyCoverage(c, now).usable, true);
   assert.equal(evaluate(c, now).reason, 'insufficient_repeated_recoveries');
+});
+test('seeded current-hour prices become a market baseline after a manual-run break', () => {
+  const state = emptyState(); state.ids = Array.from({length: 30}, (_, i) => String(i));
+  const first = now + 46 * 60_000, later = first + 40 * 60_000;
+  const points = state.ids.flatMap(id => [
+    {id, kind: 'hour', at: now - H, price: 106_000},
+    ...[31, 16, 1].map(m => ({id, kind: 'recent', at: first - m * 60_000, price: 106_000}))
+  ]);
+  seedHistory(state, state.ids, points, first);
+  assert.ok(state.cards['0'].history.some(p => p.at === now));
+  scan(state, state.ids.map(id => ({id, name: 'A', rating: 87, price: 106_000, at: first - 60_000})), first);
+  const report = scan(state, state.ids.map(id => ({id, name: 'A', rating: 87, price: 106_000, at: later - 60_000})), later);
+  assert.equal(report.market.sample, 30);
+  assert.equal(report.paused, false);
 });
