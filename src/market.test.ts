@@ -23,7 +23,7 @@ test('market cache coalesces requests and expires by checked time, not history w
  assert.equal(calls,1);
  row.capturedAt.setTime(Date.now()-40*60000);
  assert.equal((await market.snapshot()).length,1);
- row.checkedAt.setTime(Date.now()-20*60000);
+ (market as any).cached.cards[0].checkedAt.setTime(Date.now()-20*60000);
  assert.equal((await market.snapshot()).length,0);
  assert.equal(calls,1);
 });
