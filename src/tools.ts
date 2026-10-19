@@ -6,9 +6,12 @@ import {watch,watchedMarkets,guildSettings} from './settings.js';
 import type {AlertRepository} from './alerts.js';
 import type {Card} from './domain.js';
 import {coins,isFresh} from './domain.js';
+import {fetchFutggContext} from './futgg-context.js';
 const player=(o:any)=>o.setName('player').setDescription('Choose an exact card').setRequired(true).setAutocomplete(true);
 export const extraCommands=[
  new SlashCommandBuilder().setName('fodder').setDescription('🧱 Cheapest fresh cards by rating, with a visual price ladder'),
+ new SlashCommandBuilder().setName('evolutions').setDescription('🧬 Open Evolutions with eligible cards and fresh prices').addStringOption(o=>o.setName('market').setDescription('Price market for card candidates').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})),
+ new SlashCommandBuilder().setName('gallery').setDescription('🏆 FUT.GG Gallery tiers ranked by coins per token'),
  new SlashCommandBuilder().setName('consumables').setDescription('🧴 Top consumable price rises and drops').addStringOption(o=>o.setName('market').setDescription('Choose the price market').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})).addStringOption(o=>o.setName('category').setDescription('Limit the board to a category').addChoices({name:'All consumables',value:'all'},{name:'Managers',value:'manager'},{name:'Manager leagues',value:'manager_league'},{name:'Chemistry styles',value:'chemistry_style'})).addIntegerOption(o=>o.setName('rating').setDescription('Optional exact rating, e.g. 85').setMinValue(75).setMaxValue(99)),
  new SlashCommandBuilder().setName('movers').setDescription('📈 Biggest rises or falls against an observation near 24 hours ago').addStringOption(o=>o.setName('direction').setDescription('Market direction').addChoices({name:'📈 Risers',value:'risers'},{name:'📉 Fallers',value:'fallers'})),
  new SlashCommandBuilder().setName('budget').setDescription('💎 Fresh-priced players within your coin budget').addIntegerOption(o=>o.setName('coins').setDescription('Maximum price').setRequired(true).setMinValue(1).setMaxValue(15000000)).addStringOption(o=>o.setName('position').setDescription('Primary position, e.g. ST or CM').setMaxLength(4)).addIntegerOption(o=>o.setName('rating').setDescription('Minimum rating').setMinValue(75).setMaxValue(99)),
@@ -24,6 +27,37 @@ export const extraCommands=[
 export function cardLines(cards:MarketCard[]){return cards.slice(0,10).map((c,i)=>`**${String(i+1).padStart(2,'0')} · ${c.name.replace(/[*_`~|\\]/g,'')}** · ${c.rating??'—'} ${c.position??''}\n🪙 **${coins(c.value)}**${c.change===null?'':` · ${c.change>=0?'📈 +':'📉 '}${c.change.toFixed(1)}%`}`).join('\n\n')||'No fresh prices match. Try a different filter or check the collector.';}
 export async function handleTool(i:ChatInputCommandInteraction,market:MarketService,repo:AlertRepository,brand:(pricePlatform?:string)=>EmbedBuilder,resolve:(id:string)=>Promise<Card>,limits={watch:20}){
  const year=market.prices.year,platform=market.platform;
+ if(i.commandName==='evolutions'){
+  const selectedPlatform=i.options.getString('market')??platform;
+  if(!['ps5','pc'].includes(selectedPlatform))throw new Error('Choose Console or PC.');
+  const context=await fetchFutggContext(year),rows=context.evolutions.slice(0,7);
+  if(!rows.length){await i.editReply({embeds:[brand().setTitle('🧬 NO OPEN EVOLUTIONS').setDescription('FUT.GG currently lists no open Evolutions for this game year.')]});return;}
+  const lines=await Promise.all(rows.map(async evo=>{
+   const ids=[...evo.eligibleCardIds.slice(0,2).map(id=>({id,reason:'eligible'})),...evo.trendingCardIds.slice(0,1).map(id=>({id,reason:'trending'}))];
+   const candidates=await Promise.all(ids.map(async entry=>{
+    const card=await market.prices.card(entry.id);
+    const price=card?await market.prices.latest(card.id,selectedPlatform):null;
+    const fresh=!!price&&isFresh(price.capturedAt,market.maxAge);
+    return `• ${card?`${card.name} · ${card.rating??'—'} OVR`:`Card ${entry.id}`} (${entry.reason}) · ${fresh?coins(price!.value)+' coins':'no fresh price'}`;
+   }));
+   const cost=evo.coinsCost!==null?coins(evo.coinsCost)+' coins':evo.pointsCost!==null?evo.pointsCost+' points':'cost not listed';
+   const date=Math.floor(Date.parse(evo.closesAt)/1000);
+   return `**${evo.name}** · ${cost} · closes <t:${date}:R>\n${candidates.join('\n')||'No card candidates listed'} · ${evo.eligibleCardIds.length} eligible listed`;
+  }));
+  const embed=brand(selectedPlatform).setTitle('🧬 OPEN EVOLUTIONS').setDescription(lines.join('\n\n').slice(0,4000)).addFields({name:'PRICE CHECK',value:'Prices come from Futbot’s existing price feed and are labelled when fresh. Trending cards are not confirmed as eligible.'});
+  await i.editReply({embeds:[embed]});return;
+ }
+ if(i.commandName==='gallery'){
+  const context=await fetchFutggContext(year),rows=context.gallery.filter(row=>row.coinsPerToken!==null).slice(0,8);
+  if(!rows.length){await i.editReply({embeds:[brand().setTitle('🏆 GALLERY DATA UNAVAILABLE').setDescription('FUT.GG returned no Gallery tiers with a positive cost and token reward.')]});return;}
+  const lines=await Promise.all(rows.map(async row=>{
+   const cards=await Promise.all(row.cardIds.slice(0,3).map(id=>market.prices.card(id)));
+   const names=cards.filter(Boolean).map(card=>card!.name).join(', ');
+   return `**${row.name} · ${row.grade}**\n${row.cost===null?'Cost missing':coins(row.cost)+' coins'} / ${row.tokens??'—'} tokens = **${coins(row.coinsPerToken!)} per token**\n${row.itemCount} cards${names?` · ${names}`:''}`;
+  }));
+  const embed=brand().setTitle('🏆 GALLERY VALUE').setDescription(lines.join('\n\n').slice(0,4000)).addFields({name:'HOW TO READ THIS',value:'Ranked by listed Gallery cost per token. Card names are examples from the tier lineup. Check the in-game requirements and current prices before spending.'});
+  await i.editReply({embeds:[embed]});return;
+ }
  if(i.commandName==='fodder'){
  const rating=i.options.getInteger('rating')??undefined,cards=await market.snapshot(),rows=fodderRows(cards,rating);
  const embed=brand().setTitle('🧱 FODDER WATCH').setDescription(rating?'Three fresh-priced alternatives at this rating. Check rarity and SBC requirements before buying.':'Cheapest fresh card at each rating. Use /fodder rating:85 for up to three alternatives. Check SBC requirements in-game.').setImage('attachment://fodder.png');
@@ -63,5 +97,6 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
  if(i.commandName==='compare'){const cards=await Promise.all(['first','second'].map(n=>resolve(i.options.getString(n,true))));const embeds=[];for(const c of cards){const p=await market.prices.latest(c.id,platform);const e=brand().setTitle(`⚖️ ${c.name} · ${c.rating??'—'} ${c.position??''}`).setDescription(`${c.rarity??'Player item'} · ${c.club??'—'}`).addFields({name:'LOWEST BIN',value:p?coins(p.value)+' coins':'Unavailable',inline:true},{name:'PRICE STATUS',value:p?`${isFresh(p.capturedAt,market.maxAge)?'🟢 Fresh':'🟠 Stale'} · <t:${Math.floor(p.capturedAt.getTime()/1000)}:R>`:'No observation',inline:true},{name:'AFTER TAX',value:p?coins(Math.floor(p.value*.95))+' coins':'—',inline:true});if(c.image?.startsWith('https://'))e.setThumbnail(c.image);embeds.push(e);}await i.editReply({embeds});return;}
  if(['pausealert','resumealert'].includes(i.commandName)){const id=i.options.getString('id',true);if(!/^\d+$/.test(id))throw new Error('Enter a numeric alert ID.');const pause=i.commandName==='pausealert';const r=await repo.pool.query('UPDATE futbot_alerts SET state=$1 WHERE user_id=$2 AND id=$3 AND state=$4 RETURNING id',[pause?'paused':'active',i.user.id,id,pause?'active':'paused']);await i.editReply(r.rowCount?`✅ Alert #${id} ${pause?'paused':'resumed'}.`:'No matching alert in the required state belongs to you.');return;}
  if(i.commandName==='dashboard'){const url=process.env.PUBLIC_URL;if(!url){await i.editReply('Your dashboard URL has not been configured yet. Set PUBLIC_URL on the bot service.');return;}await i.editReply({embeds:[brand().setTitle('🎛 YOUR FUTBOT CONTROL ROOM').setDescription('Your watchlist, personal targets and live market tools. Server managers also get branding, publishing and activity controls.')],components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setLabel('Open FutBot').setStyle(ButtonStyle.Link).setURL(new URL('/app/',url).href))]});return;}
- if(i.commandName==='help')await i.editReply({embeds:[brand().setTitle('📖 YOUR ULTIMATE TEAM TOOLKIT').setDescription('🪙 **Prices** · /price · /compare · /tax\n🧱 **Fodder** · /fodder rating:85\n🧴 **Consumables** · /consumables · /consumable\n📈 **Market** · /movers · /budget\n⭐ **Watchlist** · /watch · /watchlist · /unwatch\n🔔 **Targets** · /alert · /myalerts · /editalert · /removealert\n⏯ **Controls** · /pausealert · /resumealert · /testdm\n📈 **Trader auto posts** · /tradepost set · /tradepost list · /tradepost cancel *(Trader role only)*\n⭐ **Server lists** · /serverwatchlist · /serverpro\n🎛 **Dashboard** · /dashboard\n\nPrices are observed market data, not guaranteed listings or profit.') ]});
+ if(i.commandName==='help')await i.editReply({embeds:[brand().setTitle('📖 YOUR ULTIMATE TEAM TOOLKIT').setDescription('🪙 **Prices** · /price · /compare · /tax\n🧬 **FUT.GG** · /evolutions · /gallery\n🧱 **Fodder** · /fodder rating:85\n🧴 **Consumables** · /consumables · /consumable\n📈 **Market** · /movers · /budget\n⭐ **Watchlist** · /watch · /watchlist · /unwatch\n🔔 **Targets** · /alert · /myalerts · /editalert · /removealert\n⏯ **Controls** · /pausealert · /resumealert · /testdm\n📈 **Trader auto posts** · /tradepost set · /tradepost list · /tradepost cancel *(Trader role only)*\n⭐ **Server lists** · /serverwatchlist · /serverpro\n🎛 **Dashboard** · /dashboard\n\nPrices are observed market data, not guaranteed listings or profit.') ]});
 }
+

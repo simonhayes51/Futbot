@@ -77,6 +77,9 @@ or automatically request per-player evolution paths. Those fields appear
 when the corresponding captured HAR response is provided. A mixed run can
 use both `--har` and `--live`, preserving each source's own timestamp.
 
+
+The Futbot bot also has live `/evolutions` and `/gallery` commands. They fetch FUT.GG's public Evolution manifest/data and Gallery hub on demand (cached for five minutes), then use the existing price database to label Evolution candidates with fresh prices and show example Gallery lineup cards. They do not require a HAR file or a new database table. Live endpoint access depends on the bot host reaching FUT.GG.
+
 ## Attach existing fresh prices to watch candidates
 
 ```bash
@@ -148,3 +151,4 @@ per-grade Gallery selections, zero costs, partial evolution paths, public
 field allowlisting, capture ordering and explicit HTTP failures. Captured
 responses have also been replayed through the CLI. No production database
 access or live delivery to Discord was tested.
+
