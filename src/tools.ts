@@ -1,5 +1,5 @@
 import {SlashCommandBuilder,AttachmentBuilder,ActionRowBuilder,StringSelectMenuBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,type ChatInputCommandInteraction,type StringSelectMenuInteraction} from 'discord.js';
-import type {MarketService,MarketCard} from './market.js';
+import {MarketService,type MarketCard} from './market.js';
 import {fodderRows,movers} from './market.js';
 import {fodderBoard,consumablesBoard,rankConsumables} from './boards.js';
 import {watch,watchedMarkets,guildSettings} from './settings.js';
@@ -31,7 +31,8 @@ export async function handleFutggSelect(i:StringSelectMenuInteraction,market:Mar
  if(kind==='evolution'){
   const evo=context.evolutions.find(row=>row.id===i.values[0]);
   if(!evo)throw new Error('That Evolution is no longer open. Run /evolutions again.');
-  const eligible=new Set(evo.eligibleCardIds),fresh=(await market.snapshot()).filter(card=>eligible.has(card.id)).sort((a,b)=>a.value-b.value).slice(0,8);
+  const selectedMarket=platform===market.platform?market:new MarketService(market.prices,platform,market.maxAge);
+  const eligible=new Set(evo.eligibleCardIds),fresh=(await selectedMarket.snapshot()).filter(card=>eligible.has(card.id)).sort((a,b)=>a.value-b.value).slice(0,8);
   const lines=fresh.length?fresh.map(card=>`• **${card.name} · ${card.rating??'—'} OVR** — ${coins(card.value)} coins`):await Promise.all(evo.eligibleCardIds.slice(0,8).map(async id=>{const card=await market.prices.card(id);return `• ${card?.name&&!/^unknown(?: card| player)?$/i.test(card.name)?`${card.name} · ${card.rating??'—'} OVR`:`Card ${id}`} — no fresh price`;}));
   const close=Math.floor(Date.parse(evo.closesAt)/1000),cost=evo.coinsCost!==null?coins(evo.coinsCost)+' coins':evo.pointsCost!==null?evo.pointsCost+' points':'cost not listed';
   const note=fresh.length?'Cheapest eligible cards with fresh prices.':'No fresh eligible-card prices are available right now; these are examples from the eligibility list.';
