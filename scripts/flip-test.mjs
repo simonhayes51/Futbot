@@ -75,8 +75,17 @@ export function seedHistory(state, ids, rows, now) {
         hours.set(at, {at, values: [price]});
       if (row.kind === 'recent' && at >= now - HOUR) recent.set(at, {at, price});
     }
-    card.history = [...hours.values()].filter(p => p.at >= now - 7 * DAY).sort((a, b) => a.at - b.at);
     card.recent = [...recent.values()].filter(p => p.at >= now - HOUR).sort((a, b) => a.at - b.at).slice(-3);
+    // These timestamps are already in recent, so ingest will not add them again.
+    // Record their current-hour samples here or the first completed hour is lost.
+    for (const p of card.recent) {
+      const bucket = Math.floor(p.at / HOUR) * HOUR;
+      if (bucket !== Math.floor(now / HOUR) * HOUR) continue;
+      const point = hours.get(bucket) ?? {at: bucket, values: []};
+      point.values[Math.floor(p.at / 900_000) % 4] = p.price;
+      hours.set(bucket, point);
+    }
+    card.history = [...hours.values()].filter(p => p.at >= now - 7 * DAY).sort((a, b) => a.at - b.at);
     card.historySeededAt = now;
   }
 }
@@ -87,14 +96,15 @@ function historyTable(platform) {
   throw new Error('PLATFORM must be ps5 or pc');
 }
 
-export function historySQL(platform) {
+export function historySQL(platform, hours = 168) {
+  if (!Number.isInteger(hours) || hours < 1 || hours > 168) throw new Error('History hours must be 1–168');
   const table = historyTable(platform);
   return `SELECT p.source_card_id::text AS id,'hour' AS kind,h.at,h.price
     FROM public.futgg_players p JOIN LATERAL (
       SELECT date_trunc('hour',captured_at) AS at,
         percentile_cont(0.5) WITHIN GROUP(ORDER BY lowest_bin) AS price
       FROM ${table} WHERE source_card_id=p.source_card_id AND game_year=$1 AND platform=$2
-        AND lowest_bin>0 AND captured_at>=date_trunc('hour',$4::timestamptz)-interval '7 days'
+        AND lowest_bin>0 AND captured_at>=date_trunc('hour',$4::timestamptz)-interval '${hours} hours'
         AND captured_at<date_trunc('hour',$4::timestamptz)
       GROUP BY 1
     ) h ON true WHERE p.game_year=$1 AND p.source_card_id::text=ANY($3::text[])
@@ -278,10 +288,26 @@ async function main() {
         historyRows += loaded.rows.length;
         console.error(`Flip test history loaded: ${Math.min(i + 20, unseeded.length)}/${unseeded.length} cards`);
       }
+      // A manual --once run may follow a long break. Fill only the missed recent
+      // window instead of leaving the market baseline empty or reloading a week.
+      const fullLoads = new Set(unseeded);
+      const catchup = !state.lastScanAt || now - state.lastScanAt > 25 * 60_000
+        ? rows.map(r => String(r.id)).filter(id => !fullLoads.has(id)) : [];
+      const catchupHours = Math.min(168, Math.max(4, Math.ceil((now - (state.lastScanAt ?? now - 3 * HOUR)) / HOUR) + 1));
+      let refreshedRows = 0;
+      for (let i = 0; i < catchup.length; i += 20) {
+        const ids = catchup.slice(i, i + 20);
+        const loaded = await pool.query(historySQL(platform, catchupHours), [year, platform, ids, new Date(now)]);
+        seedHistory(state, ids, loaded.rows, now);
+        refreshedRows += loaded.rows.length;
+        console.error(`Flip test recent history refreshed: ${Math.min(i + 20, catchup.length)}/${catchup.length} cards`);
+      }
       // Backfill can take time: use a fresh snapshot for the first decision.
-      if (unseeded.length) ({rows} = await pool.query(sql, [year, platform, state.ids.length ? state.ids : rows.map(r => String(r.id)), cap]));
+      if (unseeded.length || catchup.length) ({rows} = await pool.query(sql, [year, platform, state.ids.length ? state.ids : rows.map(r => String(r.id)), cap]));
       const report = scan(state, rows, Date.now());
       report.historyLoaded = {cards: unseeded.length, rows: historyRows};
+      report.historyRefreshed = {cards: catchup.length, rows: refreshedRows, hours: catchup.length ? catchupHours : 0};
+      state.lastScanAt = Date.now();
       // State includes signals/outcomes for seven days, avoiding an unbounded log.
       await atomicJSON(file, state);
       await atomicJSON(resolve(directory, 'latest.json'), report);
