@@ -5,6 +5,11 @@ export type MarketCard=Card&{value:number;capturedAt:Date;checkedAt:Date;previou
 
 const unavailablePriceStatuses=new Set(['bulk_no_market','no_active_market','untradeable']);
 
+export function currentPriceStatus(status:string|null,priceCheckedAt:Date|null,priceUpdatedAt:Date|null){
+  if(!unavailablePriceStatuses.has(status??''))return status;
+  return priceCheckedAt&&priceUpdatedAt&&priceCheckedAt>priceUpdatedAt?null:status;
+}
+
 export function hasFreshPrice(checkedAt:Date,status:string|null,maxAgeMinutes:number,now=Date.now()){
   return !unavailablePriceStatuses.has(status??'')&&isFresh(checkedAt,maxAgeMinutes,now);
 }
@@ -31,6 +36,8 @@ export class MarketService{
  l.lowest_bin::int AS value,l.captured_at AS "capturedAt",
  CASE WHEN $2='ps5' THEN GREATEST(l.captured_at,COALESCE(p.price_checked_at,l.captured_at)) ELSE l.captured_at END AS "checkedAt",
  CASE WHEN $2='ps5' THEN p.last_price_status ELSE NULL END AS "priceStatus",
+ CASE WHEN $2='ps5' THEN p.price_checked_at ELSE NULL END AS "priceCheckedAt",
+ CASE WHEN $2='ps5' THEN p.price_updated_at ELSE NULL END AS "priceUpdatedAt",
  b.lowest_bin::int AS previous,b.captured_at AS "previousAt"
  FROM public.futgg_players p
  JOIN LATERAL (
@@ -50,7 +57,11 @@ export class MarketService{
    ...r,
    value:Number(r.value),
    checkedAt:new Date(r.checkedAt??r.capturedAt),
-   priceStatus:r.priceStatus===null||r.priceStatus===undefined?null:String(r.priceStatus),
+   priceStatus:currentPriceStatus(
+     r.priceStatus===null||r.priceStatus===undefined?null:String(r.priceStatus),
+     r.priceCheckedAt?new Date(r.priceCheckedAt):null,
+     r.priceUpdatedAt?new Date(r.priceUpdatedAt):null
+   ),
    previous:r.previous===null?null:Number(r.previous),
    change:r.previous?((Number(r.value)-Number(r.previous))/Number(r.previous))*100:null
  })).filter(r=>hasFreshPrice(r.checkedAt,r.priceStatus,this.maxAge)&&completeCard(r)).map(({priceStatus:_,...card})=>card);
