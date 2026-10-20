@@ -32,6 +32,22 @@ Mount a persistent volume at `/data/flip-test` on Coolify/Railway. Without a vol
 redeployments can lose history and trigger another initial history load. Default is `.flip-test` in the
 working directory; keep it outside Git. State is separated by year and platform.
 
+## Diagnose existing history
+
+Run a one-off coverage report against the existing price history:
+
+```bash
+FLIP_TEST_MAX_CARDS=20 FLIP_TEST_DIR=/tmp/flip-probe node scripts/flip-test.mjs --diagnose-history
+```
+
+The mode exits after one run, lists each selected card's observed hours in each
+24-hour window, strict history failures, and whether three recent observations
+span at least 20 minutes. It also compares a hypothetical diagnostic threshold
+of 10 hours per window, at most two partial days, and 50 total hours. That
+exploratory threshold is coverage math only: it never enters candidate evaluation
+or creates signals. The database connection remains read-only; state and report
+files are written only under the separate `FLIP_TEST_DIR`.
+
 ## Cost and scope
 
 - One read-only, eight-second-timeout SQL query per routine check (96/day), one connection.
