@@ -5,6 +5,7 @@ import {fodderBoard,consumablesBoard,rankConsumables} from './boards.js';
 import {watch,watchedMarkets,guildSettings} from './settings.js';
 import type {AlertRepository} from './alerts.js';
 import type {Card} from './domain.js';
+import {namedCard} from './futgg-cards.js';
 import {coins,isFresh} from './domain.js';
 import {fetchFutggContext} from './futgg-context.js';
 import {fetchPlayerPaths,pathUrl} from './evo-paths.js';
@@ -50,7 +51,22 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
     lines.push(full?players.map(p=>`• **${p.name}** · ${p.overall} ${p.rarity} · ${coins(p.price)}`).join('\n'):best.groups.map(g=>`${g.count}× ${g.overall} rated · ${coins(g.unitPrice)} each`).join('\n')+'\nPlayer names are not available from the feed right now.');
     const target=c.scoreRequirement??best.score;solverLinks.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`Solve ${index+1} on FUT.GG`).setURL(`https://www.fut.gg/sbc/streamlined-solver/?target=${target}&platform=${selectedPlatform}`));
    }
-   else if(c.solutionUrl){let names:string[]=[];try{names=await fetchSbcSolutionNames(c.solutionUrl,fetch,id=>market.prices.playerName(id));}catch{/* Keep the direct solution link available if its page is temporarily unavailable. */}lines.push(names.length?`**Best solution · ${names.length} cards**\n${names.map(name=>'• '+name).join('\n')}`:'**Best squad solution** · Open the linked FUT.GG squad for the full card list.');solverLinks.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`Solution ${index+1}`).setURL(c.solutionUrl));}
+   else if(c.solutionUrl){
+    let names:string[]=[];
+    try{
+     names=await fetchSbcSolutionNames(c.solutionUrl,fetch,async id=>{
+      try{const indexed=await market.prices.playerName(id);if(indexed)return indexed;}catch{/* Try FUT.GG's exact item catalogue below. */}
+      const card=await market.prices.galleryCard(id).catch(()=>null);
+      return namedCard(card)?card.name:null;
+     });
+    }catch{/* Keep the direct solution link available if its page is temporarily unavailable. */}
+    const identified=names.filter(name=>!/^Unknown card \\(\\d+\\)$/.test(name)).length;
+    const complete=names.length===11&&identified===11;
+    const label=complete?'Best solution · 11 players':`FUT.GG squad · ${identified}/11 players identified`;
+    const note=complete?'':'\nSome card names are missing or could not be matched; check the squad before submitting.';
+    lines.push(names.length?`**${label}**\n${names.map(name=>'• '+name).join('\n')}${note}`:'**FUT.GG squad solution** · Open the linked FUT.GG squad for the full card list.');
+    solverLinks.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`Solution ${index+1}`).setURL(c.solutionUrl));
+   }
    else if(c.streamlined)lines.push('FUT.GG has not published a solution for this challenge yet.');
    const value=lines.filter(Boolean).join('\n').slice(0,1000)||'Challenge details are not available.';
    embed.addFields({name:`${index+1}. ${c.name}`.slice(0,256),value});
