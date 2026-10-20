@@ -76,7 +76,13 @@ export async function fetchSbcSolutionNames(url:string,fetcher:typeof fetch=fetc
  const positions=payload?.data?.data?.activeGroupPositions;
  if(!Array.isArray(positions))return[];
  const players=positions.filter((p:any)=>p?.group==='FIELD'&&/^\d+$/.test(String(p.playerEaId??''))).sort((a:any,b:any)=>Number(a.positionIdx)-Number(b.positionIdx)).slice(0,11);
- return (await Promise.all(players.map(async(p:any)=>{
-  const name=await resolve(String(p.playerEaId));return name?`${name}`:null;
- }))).filter((name):name is string=>!!name);
+ return Promise.all(players.map(async(p:any)=>{
+  const id=String(p.playerEaId);
+  try{
+   const name=await resolve(id);
+   return name?.trim()?name.trim():`Unknown card (${id})`;
+  }catch{
+   return `Unknown card (${id})`;
+  }
+ }));
 }
