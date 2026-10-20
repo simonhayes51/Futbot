@@ -211,7 +211,7 @@ async function handle(i:Interaction){
       await i.respond(choices);return;
     }
     const query=String(q).trim().toLocaleLowerCase();
-    if(i.commandName==='evolutions'){
+    if(['evolution','evolutions'].includes(i.commandName)){
       const rows=(await fetchFutggContext(market.prices.year)).evolutions.filter(row=>!query||row.name.toLocaleLowerCase().includes(query)).slice(0,25);
       await i.respond(rows.map(row=>({name:`${row.name} · ${row.playerCount??row.eligibleCardIds.length} FUT.GG results`.slice(0,100),value:row.id})));return;
     }
@@ -223,7 +223,7 @@ async function handle(i:Interaction){
       await i.respond(choices);return;
     }
     if(q.length<2){await i.respond([]);return;}
-    const cards=await prices.search(q);await i.respond(cards.map(c=>({name:`${c.name} · ${c.rating??'?'} ${c.position??''} · ${c.rarity??''}`.slice(0,100),value:c.id})));return;
+    const cards=await prices.search(q);await i.respond(cards.slice(0,25).map(c=>({name:`${c.name} · ${c.rating??'?'} ${c.position??''} · ${c.rarity??''}`.slice(0,100),value:c.id})));return;
   }
   if(i.isStringSelectMenu()&&i.customId==='feedcard'){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showPrice(await resolveCard(i.values[0])));return;}
   if(i.isStringSelectMenu()&&i.customId==='miscfeeditem'){await i.deferReply({flags:MessageFlags.Ephemeral});const [type,id,pricePlatform]=i.values[0].split(':');if(isMiscItemType(type))await i.editReply(await showMiscPrice(type,id,24,pricePlatform));else await i.editReply('That consumable selection is invalid.');return;}
@@ -249,7 +249,7 @@ async function handle(i:Interaction){
   if(i.isModalSubmit()&&i.customId.startsWith('miscmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,type,id,direction,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))throw new Error('Choose a valid consumable.');const target=Number(i.fields.getTextInputValue('target')),latest=await prices.miscLatest(type,id,pricePlatform);if(!Number.isInteger(target)||target<1||target>15000000)throw new Error('Choose a valid target price.');if(!latest||latest.price===null||latest.price<=0||!isFresh(latest.last_checked_at??latest.captured_at,Math.max(30,maxAge)))throw new Error('No fresh listed price is available for this item.');const itemLabel=latest.display_name||miscCatalog.label(type,id);await alerts.createMisc({userId:i.user.id,year,platform:pricePlatform,itemType:type,itemId:id,itemLabel,direction:direction as Direction,target,baseline:latest.price},(await benefits(alerts.pool,i.user.id)).alerts);await i.editReply(`🔔 Watching ${itemLabel} on ${pricePlatform.toUpperCase()} from ${coins(latest.price)} coins. You’ll get one DM when it reaches ${direction} ${coins(target)}.`);return;}
   if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,id,direction,pricePlatform]=i.customId.split(':');await i.editReply({embeds:[await createAlert(i,id,direction==='above'?'above':'below',Number(i.fields.getTextInputValue('target')),pricePlatform)]});return;}
   if(!i.isChatInputCommand())return;
-  await i.deferReply({flags:!['price','consumable','consumables','flip','fodder','movers','budget','compare','evolutions','gallery'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
+  await i.deferReply({flags:!['price','consumable','consumables','flip','fodder','movers','budget','compare','evolution','evolutions','evo','gallery'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
   if(extraCommands.some(c=>c.name===i.commandName)){await handleTool(i,market,alerts,brand,resolveCard,await benefits(alerts.pool,i.user.id));return;}
   if(i.commandName==='tradepost'){
    if(!i.guildId)throw new Error('Run this command inside your Discord server.');

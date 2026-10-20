@@ -47,6 +47,13 @@ export class PriceRepository {
       FROM public.futgg_players WHERE source_card_id=$1 AND game_year=$2`, [id,this.year]);
     return rows[0] || null;});
   }
+  async evoIdentity(cardId:string):Promise<{playerId:string;url:string}|null>{
+    if(!/^[1-9]\d*$/.test(cardId))throw new Error('Choose an exact player card.');
+    return this.cached('evo-identity:'+cardId,300000,async()=>{
+      const {rows}=await this.pool.query('SELECT source_player_id::text AS "playerId",source_url AS url FROM public.futgg_players WHERE source_card_id=$1 AND game_year=$2',[cardId,this.year]);
+      return rows[0]??null;
+    });
+  }
   async latest(cardId: string, platform: string): Promise<Price | null> {
     const table=this.historyTable(platform);
     return this.cached('latest:'+platform+':'+cardId,30000,async()=>{
