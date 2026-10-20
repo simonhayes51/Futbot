@@ -1,4 +1,5 @@
 import pg from 'pg';
+import {verifiedGalleryCard} from './gallery-catalogue.js';
 import {fetchExactVersion,fetchHolographicCard,namedCard} from './futgg-cards.js';
 import {logFailure} from './logging.js';
 import type { Card, Price } from './domain.js';
@@ -51,8 +52,14 @@ export class PriceRepository {
   async galleryCard(id:string):Promise<Card|null>{
     if(!/^[1-9]\d{0,15}$/.test(id))return null;
     return this.cached('gallery-card:'+id,300000,async()=>{
+      const verified=verifiedGalleryCard(this.year,id);
       const known=await this.card(id).catch(error=>{logFailure('Gallery exact card lookup failed',error);return null;});
-      if(namedCard(known))return known;
+      if(verified)return {...verified,rating:known?.rating??verified.rating,position:known?.position??verified.position,image:known?.image??verified.image};
+      if(namedCard(known)){
+        // A synced item may have a rating but no stored finish label.
+        const variant=await fetchHolographicCard(this.year,id);
+        return variant?{...variant,rating:known.rating??variant.rating,position:known.position??variant.position,image:known.image??variant.image}:known;
+      }
       // EA item versions share a base player ID. Use the indexed player column
       // for the NAME only: the Gallery feed still owns this exact item's price.
       // Do not borrow a normal version's rating, finish, club or artwork.
@@ -62,14 +69,14 @@ export class PriceRepository {
         AND COALESCE(NULLIF(display_name,''),NULLIF(name,''),NULLIF(full_name,'')) IS NOT NULL
         ORDER BY CASE WHEN source_card_id=$1 THEN 0 ELSE 1 END,source_card_id LIMIT 8`,[playerId,this.year])
         .catch(error=>{logFailure('Gallery player name lookup failed',error);return {rows:[]};});
+      // Look for exact version data before accepting a name-only fallback.
+      const versions=await Promise.all([fetchHolographicCard(this.year,id),fetchExactVersion(this.year,playerId,id)]);
+      const exact=versions.find(namedCard);if(exact)return exact;
       for(const row of rows){
         const card:Card={id,name:row.name,rating:null,position:null,rarity:null,club:null,image:null,versionDetailsMissing:true};
         if(namedCard(card))return card;
       }
-      // Optional public lookup when the player itself has not been synced yet.
-      // A blocked source or missing version must not abort the shopping list.
-      const versions=await Promise.all([fetchHolographicCard(this.year,id),fetchExactVersion(this.year,playerId,id)]);
-      return versions.find(namedCard)??null;
+      return null;
     });
   }
   async evoIdentity(cardId:string):Promise<{playerId:string;url:string}|null>{

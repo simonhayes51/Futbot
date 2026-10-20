@@ -14,7 +14,8 @@ export function galleryPage(tier:GalleryValue,cards:Map<string,Card|null>,page:n
  page=Math.max(0,Math.min(pages-1,Math.trunc(page)||0));
  const lines=items.slice(page*PAGE_SIZE,(page+1)*PAGE_SIZE).map((item,index)=>{
   const card=cards.get(item.id);
-  const details=namedCard(card)?(card.versionDetailsMissing?`**${clean(card.name)}**\nVersion details unavailable`:`**${clean(card.name)}**${card.rating===null?'':' · '+card.rating+' OVR'}\n${clean(card.rarity??'Player item')}`):'**Player details unavailable**\nCheck this item on FUT.GG';
+  const label=namedCard(card)?(card.sourceUrl&&/^https:\/\/www\.fut\.gg\/players\//.test(card.sourceUrl)?`[**${clean(card.name)}**](${card.sourceUrl})`:`**${clean(card.name)}**`):'';
+  const details=namedCard(card)?(card.versionDetailsMissing?`${label}\nVersion details unavailable`:`${label}${card.rating===null?'':' · '+card.rating+' OVR'}\n${clean(card.rarity??'Player item')}`):'**Player details unavailable**\nCheck this item on FUT.GG';
   return `${page*PAGE_SIZE+index+1}. ${details} · **${item.price===null?'Price unavailable':coins(item.price)+' coins'}**`;
  });
  const subtotal=items.every(item=>item.price!==null)?items.reduce((sum,item)=>sum+item.price!,0):null;
@@ -33,7 +34,7 @@ async function render(key:string,session:Session,grade:string,page:number){
  }));
  const final=galleryPage(tier,session.cards,view.page);
  const highest=session.tiers[0].grade;
- const embed=session.brand().setTitle('🏆 '+tier.name).setURL('https://www.fut.gg/gallery/').setDescription(`${session.notice?session.notice+'\n\n':''}**${tier.grade} tier · ${coins(tier.cost??0)} coins estimated**\n${tier.tokens??'—'} tokens · ${tier.coinsPerToken===null?'—':coins(tier.coinsPerToken)} coins per token\n\n**Cards to buy · ${items.length} total**\n${final.lines.join('\n\n')}`)
+ const embed=session.brand().setTitle('🏆 '+tier.name).setURL('https://www.fut.gg/fut-gallery/').setDescription(`${session.notice?session.notice+'\n\n':''}**${tier.grade} tier · ${coins(tier.cost??0)} coins estimated**\n${tier.tokens??'—'} tokens · ${tier.coinsPerToken===null?'—':coins(tier.coinsPerToken)} coins per token\n\n**Cards to buy · ${items.length} total**\n${final.lines.join('\n\n')}`)
  .addFields({name:`Page ${final.page+1} of ${final.pages}`,value:`Choose a tier below. ${highest==='S'?'S is the highest tier.':highest+' is the highest tier supplied.'}\nFUT.GG estimates · Console prices · Owned cards are not deducted.`});
  if(final.subtotal!==null&&final.subtotal!==tier.cost)embed.addFields({name:'Price difference',value:`Cards add up to ${coins(final.subtotal)} coins; the set estimate is ${coins(tier.cost??0)}. Check prices before buying.`});
  const tiers=new ActionRowBuilder<ButtonBuilder>().addComponents(session.tiers.map(t=>new ButtonBuilder().setCustomId(`gallery:${key}:tier:${t.grade}:0`).setStyle(t.grade===grade?ButtonStyle.Primary:ButtonStyle.Secondary).setLabel(`${t.grade} tier`).setDisabled(t.grade===grade)));

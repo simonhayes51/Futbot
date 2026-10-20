@@ -17,7 +17,7 @@ export function exactVersion(payload:unknown,id:string,year:number):Card|null{
     if(!name)continue;
     const rarity=text(row.rarityName)||text(object(row.rarity).name)||'Player item';
     const finish=text(row.holographicType);
-    return {id,name,rating:number(row.overall),position:null,rarity:finish?`${rarity} · ${finish==='holographic'?'Holographic':finish}`:rarity,club:null,image:text(row.cardImageUrl)||null};
+    return {id,name,rating:number(row.overall),position:null,rarity:finish?`${rarity} · ${finish==='holographic'?'Holographic':finish==='pristine'?'Pristine Holographic':finish}`:rarity,club:null,image:text(row.cardImageUrl)||null};
    }
    if(Array.isArray(row.itemVariants)){const match=visit(row.itemVariants);if(match)return match;}
   }
@@ -55,8 +55,29 @@ export async function fetchHolographicCard(year:number,id:string,fetcher:typeof 
  let hit=holographCache.get(year);
  if(!hit||hit.until<Date.now()){
   const value=(async()=>{
-   const response=await fetcher('https://www.fut.gg/api/gg-club/community/holograph/?finish=all',{headers:{accept:'application/json'},signal:AbortSignal.timeout(5000)});
-   return response.ok?holographicCards(await response.json(),year):new Map<string,Card>();
+   const deadline=Date.now()+10000;
+   const get=async(url:string)=>{
+    if(Date.now()>=deadline)return null;
+    try{const response=await fetcher(url,{headers:{accept:'application/json'},signal:AbortSignal.timeout(Math.max(1,Math.min(5000,deadline-Date.now())))});return response.ok?await response.json():null;}catch{return null;}
+   };
+   const url='https://www.fut.gg/api/gg-club/community/holograph/?finish=all';
+   const first=await get(url),cards=holographicCards(first,year),root=object(object(first).data??first);
+   const pages=typeof root.cataloguePages==='number'?Math.min(25,Math.floor(root.cataloguePages)):1;
+   if(pages<=1||root.cataloguePage!==1)return cards;
+   const merge=(payload:unknown,page:number)=>{const row=object(object(payload).data??payload);if(row.cataloguePage!==page)return false;for(const [id,card]of holographicCards(payload,year))cards.set(id,card);return true;};
+   // Accept a pagination parameter only after the source confirms page 2.
+   // An ignored parameter must never be mistaken for a complete catalogue.
+   let parameter:string|null=null;
+   for(const key of ['page','catalogue_page','cataloguePage']){
+    const next=await get(url+'&'+key+'=2');if(merge(next,2)){parameter=key;break;}
+   }
+   if(!parameter)return cards;
+   for(let page=3;page<=pages&&Date.now()<deadline;page+=4){
+    const numbers=Array.from({length:Math.min(4,pages-page+1)},(_,n)=>page+n);
+    const results=await Promise.all(numbers.map(n=>get(url+'&'+parameter+'='+n)));
+    results.forEach((payload,index)=>merge(payload,numbers[index]));
+   }
+   return cards;
   })().catch(()=>new Map<string,Card>());
   if(holographCache.size>=5)holographCache.delete(holographCache.keys().next().value!);
   hit={until:Date.now()+300000,value};holographCache.set(year,hit);

@@ -23,3 +23,15 @@ test('numeric feed placeholders are not mistaken for real player names',()=>{
  for(const name of ['67114525','Card #67114525','Player 67114525','Unknown card #67114525'])assert(!namedCard({id:'67114525',name,rating:null,position:null,rarity:null,club:null,image:null}));
  assert(namedCard({id:'67114525',name:'Real player name',rating:null,position:null,rarity:null,club:null,image:null}));
 });
+
+test('holographic lookup reaches later catalogue pages and keeps Pristine distinct',async()=>{
+ const {fetchHolographicCard}=await import('./futgg-cards.js');const requests:string[]=[];
+ const fetcher=async(input:any)=>{const url=new URL(String(input));requests.push(url.href);const page=Number(url.searchParams.get('page')??1);return new Response(JSON.stringify({data:{cataloguePage:page,cataloguePages:3,catalogue:[{card:{eaId:900+page,game:'89',commonName:'Catalogue player',overall:88,rarityName:'Base Hero',holographicType:page===3?'pristine':'holographic'}}]}}));};
+ const result=await fetchHolographicCard(89,'903',fetcher as typeof fetch);assert.equal(result?.rarity,'Base Hero · Pristine Holographic');assert.equal(result?.rating,88);assert.equal(requests.length,3);assert(requests[2].includes('page=3'));
+});
+
+test('ignored pagination parameters cannot loop or fabricate missing variants',async()=>{
+ const {fetchHolographicCard}=await import('./futgg-cards.js');let requests=0;
+ const fetcher=async()=>{requests++;return new Response(JSON.stringify({data:{cataloguePage:1,cataloguePages:20,catalogue:[]}}));};
+ assert.equal(await fetchHolographicCard(90,'999',fetcher as typeof fetch),null);assert.equal(requests,4);
+});

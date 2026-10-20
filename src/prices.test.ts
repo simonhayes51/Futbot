@@ -31,14 +31,22 @@ test('missing Gallery items verify the exact holographic version without using a
 test('holo names resolve locally when FUT.GG is blocked, without borrowing normal-card details',async()=>{
  const {PGlite}=await import('@electric-sql/pglite');const db=new PGlite();
  await db.exec(`CREATE TABLE futgg_players(source_card_id bigint,source_player_id bigint,game_year int,display_name text,name text,full_name text,rating int,primary_position text,rarity text,club text,league text,card_image_stored_url text,card_image_url text,player_image_url text);
- INSERT INTO futgg_players(source_card_id,source_player_id,game_year,display_name,rating,rarity,card_image_url) VALUES(5661,5661,27,'Correct player',88,'Base Hero','https://example.com/normal.png'),(5661,5661,26,'Wrong season',99,'Old card',null),(5671,5671,27,'Card #5671',null,null,null),(16782887,5671,27,'Other synced player',80,'Rare',null);`);
+ INSERT INTO futgg_players(source_card_id,source_player_id,game_year,display_name,rating,rarity,card_image_url) VALUES(987654,987654,27,'Correct player',88,'Base Hero','https://example.com/normal.png'),(987654,987654,26,'Wrong season',99,'Old card',null),(987655,987655,27,'Card #987655',null,null,null),(17764871,987655,27,'Other synced player',80,'Rare',null);`);
  const prices=new PriceRepository('postgresql://unused',27),saved=globalThis.fetch;let network=0;
  (prices.pool.query as any)=async(sql:string,values:any[])=>db.query(sql,values);
  globalThis.fetch=async()=>{network++;return new Response('',{status:403});};
  try{
-  const holo=await prices.galleryCard('67114525');
-  assert.equal(holo?.name,'Correct player');assert.equal(holo?.id,'67114525');assert.equal(holo?.versionDetailsMissing,true);
-  assert.equal(holo?.rating,null);assert.equal(holo?.rarity,null);assert.equal(holo?.image,null);assert(!('price' in holo!));assert.equal(network,0);
-  const other=await prices.galleryCard('67114535');assert.equal(other?.name,'Other synced player');assert.equal(network,0);
+  const holo=await prices.galleryCard('68096518');
+  assert.equal(holo?.name,'Correct player');assert.equal(holo?.id,'68096518');assert.equal(holo?.versionDetailsMissing,true);
+  assert.equal(holo?.rating,null);assert.equal(holo?.rarity,null);assert.equal(holo?.image,null);assert(!('price' in holo!));assert(network<=4);
+  const other=await prices.galleryCard('68096519');assert.equal(other?.name,'Other synced player');assert(network<=4);
  }finally{globalThis.fetch=saved;await prices.pool.end();await db.close();}
+});
+
+test('an available exact web version is preferred to a name-only local fallback',async()=>{
+ const prices=new PriceRepository('postgresql://unused',88),saved=globalThis.fetch;
+ prices.card=async()=>null;(prices.pool.query as any)=async()=>({rows:[{name:'Name-only local player'}]});
+ globalThis.fetch=async(input:any)=>new Response(JSON.stringify(String(input).includes('all-versions')?{data:[{eaId:68096517,game:'88',commonName:'Exact item',overall:85,rarityName:'Special',holographicType:'holographic'}]}:{data:{catalogue:[]}}));
+ try{const card=await prices.galleryCard('68096517');assert.equal(card?.rating,85);assert.equal(card?.rarity,'Special · Holographic');assert(!card?.versionDetailsMissing);}
+ finally{globalThis.fetch=saved;await prices.pool.end();}
 });
