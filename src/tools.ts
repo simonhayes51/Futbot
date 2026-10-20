@@ -5,7 +5,7 @@ import {fodderBoard,consumablesBoard,rankConsumables} from './boards.js';
 import {watch,watchedMarkets,guildSettings} from './settings.js';
 import type {AlertRepository} from './alerts.js';
 import type {Card} from './domain.js';
-import {namedCard} from './futgg-cards.js';
+import {fetchExactVersion,namedCard} from './futgg-cards.js';
 import {coins,isFresh} from './domain.js';
 import {fetchFutggContext} from './futgg-context.js';
 import {fetchPlayerPaths,pathUrl} from './evo-paths.js';
@@ -56,11 +56,12 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
     try{
      names=await fetchSbcSolutionNames(c.solutionUrl,fetch,async id=>{
       try{const indexed=await market.prices.playerName(id);if(indexed)return indexed;}catch{/* Try FUT.GG's exact item catalogue below. */}
-      const card=await market.prices.galleryCard(id).catch(()=>null);
+      const playerId=String(BigInt(id)%16777216n);
+      const card=await fetchExactVersion(year,playerId,id).catch(()=>null);
       return namedCard(card)?card.name:null;
      });
     }catch{/* Keep the direct solution link available if its page is temporarily unavailable. */}
-    const identified=names.filter(name=>!/^Unknown card \\(\\d+\\)$/.test(name)).length;
+    const identified=names.filter(name=>!name.startsWith('Unknown card (')).length;
     const complete=names.length===11&&identified===11;
     const label=complete?'Best solution · 11 players':`FUT.GG squad · ${identified}/11 players identified`;
     const note=complete?'':'\nSome card names are missing or could not be matched; check the squad before submitting.';
