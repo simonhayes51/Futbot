@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage} from './flip-test.mjs';
+import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory} from './flip-test.mjs';
 
 const H = 3_600_000, now = Date.UTC(2026, 9, 19, 12);
 function card() {
@@ -200,4 +200,27 @@ test('seeded current-hour prices become a market baseline after a manual-run bre
   const report = scan(state, state.ids.map(id => ({id, name: 'A', rating: 87, price: 106_000, at: later - 60_000})), later);
   assert.equal(report.market.sample, 30);
   assert.equal(report.paused, false);
+});
+
+test('history diagnostic explains strict and exploratory coverage without signals', () => {
+  const state = emptyState(); state.ids = ['thin', 'complete'];
+  function historyCard(id, counts) {
+    const c = card();
+    c.id = id;
+    c.history = counts.flatMap((count, day) => Array.from({length: count}, (_, i) => ({
+      at: now - (day + 1) * 24 * H + i * H, values: [100_000]
+    })));
+    return c;
+  }
+  state.cards = {thin: historyCard('thin', [18, 24, 11]), complete: historyCard('complete', [22, 24, 24])};
+  const rows = state.ids.map(id => ({id, name: id, rating: 87, price: 100_000, at: now - 60_000}));
+  const report = diagnoseHistory(state, rows, now);
+  assert.equal(report.mode, 'history_diagnostic_only');
+  assert.equal(report.summary.strictHistoryPass, 1);
+  assert.equal(report.summary.exploratoryCoveragePass, 2);
+  assert.deepEqual(report.cards.find(c => c.id === 'thin').strictHistoryFailures,
+    ['day_3_below_12_hours', 'total_below_54_hours']);
+  assert.equal(report.cards.find(c => c.id === 'thin').exploratoryCoveragePass, true);
+  assert.equal('signals' in report, false);
+  assert.equal(state.calls.length, 0);
 });

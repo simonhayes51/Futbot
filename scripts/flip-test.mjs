@@ -222,6 +222,43 @@ export function scan(state, rows, now = Date.now()) {
     disclaimer: 'BIN observations only; target observed does not mean a completed sale or realised profit.'};
 }
 
+
+export function diagnoseHistory(state, rows, now = Date.now()) {
+  const cards = ingest(state, rows, now);
+  const details = cards.map(card => {
+    const coverage = historyCoverage(card, now);
+    const failures = [];
+    coverage.hours.forEach((count, index) => {
+      if (count < 12) failures.push(`day_${index + 1}_below_12_hours`);
+    });
+    if (coverage.partialDays > 1) failures.push('more_than_one_partial_day');
+    if (coverage.total < 54) failures.push('total_below_54_hours');
+    const recent = card.recent ?? [];
+    const freshConfirmed = recent.length >= 3 && recent[2].at - recent[0].at >= 20 * 60_000 &&
+      recent.every(point => now - point.at <= 60 * 60_000);
+    const exploratoryPass = coverage.hours.every(count => count >= 10) &&
+      coverage.partialDays <= 2 && coverage.total >= 50;
+    return {id: card.id, name: card.name, rating: card.rating, fresh: now - card.at <= 30 * 60_000,
+      observedHoursByDay: coverage.hours, totalObservedHours: coverage.total,
+      partialDays: coverage.partialDays, strictHistoryPass: coverage.usable,
+      strictHistoryFailures: failures, exploratoryCoveragePass: exploratoryPass,
+      recentObservations: recent.length,
+      recentSpanMinutes: recent.length >= 2 ? Math.round((recent.at(-1).at - recent[0].at) / 60_000) : 0,
+      freshConfirmationPass: freshConfirmed};
+  });
+  const failureCounts = {};
+  for (const card of details) for (const failure of card.strictHistoryFailures)
+    failureCounts[failure] = (failureCounts[failure] ?? 0) + 1;
+  return {at: new Date(now).toISOString(), mode: 'history_diagnostic_only',
+    tracked: state.ids.length, fresh: cards.length,
+    summary: {strictHistoryPass: details.filter(c => c.strictHistoryPass).length,
+      exploratoryCoveragePass: details.filter(c => c.exploratoryCoveragePass).length,
+      freshConfirmationPass: details.filter(c => c.freshConfirmationPass).length,
+      strictFailureCounts: failureCounts},
+    cards: details,
+    disclaimer: 'Coverage diagnostics only. Exploratory thresholds are hypothetical and are not used to evaluate candidates or create signals.'};
+}
+
 export function snapshotSQL(platform) {
   const table = historyTable(platform);
   return `SELECT p.source_card_id::text AS id, COALESCE(p.display_name,p.name,p.full_name) AS name,
@@ -304,7 +341,8 @@ async function main() {
       }
       // Backfill can take time: use a fresh snapshot for the first decision.
       if (unseeded.length || catchup.length) ({rows} = await pool.query(sql, [year, platform, state.ids.length ? state.ids : rows.map(r => String(r.id)), cap]));
-      const report = scan(state, rows, Date.now());
+      const report = process.argv.includes('--diagnose-history')
+        ? diagnoseHistory(state, rows, Date.now()) : scan(state, rows, Date.now());
       report.historyLoaded = {cards: unseeded.length, rows: historyRows};
       report.historyRefreshed = {cards: catchup.length, rows: refreshedRows, hours: catchup.length ? catchupHours : 0};
       state.lastScanAt = Date.now();
@@ -314,7 +352,7 @@ async function main() {
       console.log(`Flip test report: ${JSON.stringify(report)}`);
     };
     await tick();
-    if (!process.argv.includes('--once')) {
+    if (!process.argv.includes('--once') && !process.argv.includes('--diagnose-history')) {
       // Schedule after completion: slow queries cannot overlap. No tight retries.
       const controller = new AbortController();
       const stop = () => controller.abort();
