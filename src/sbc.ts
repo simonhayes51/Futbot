@@ -12,13 +12,15 @@ function stringArray(s:string,key:string):string[]{const m=s.match(new RegExp(`$
 function arrayObjects(s:string,marker:string):string[]{const at=s.indexOf(marker);if(at<0)return[];const open=s.indexOf('[',at);if(open<0)return[];let depth=0,braces=0,start=-1,quote='',escape=false;const result:string[]=[];for(let i=open;i<s.length;i++){const c=s[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';continue;}if(c==='"'||c==="'"){quote=c;continue;}if(c==='['){depth++;continue;}if(c===']'){depth--;if(depth===0)break;continue;}if(c==='{'){if(depth===1&&braces===0)start=i;braces++;continue;}if(c==='}'&&braces>0){braces--;if(depth===1&&braces===0&&start>=0){result.push(s.slice(start,i+1));start=-1;}}}return result;}
 function routeGroups(route:string):SbcGroup[]{return [...route.matchAll(/overall:(\d+),rarityEaId:(\d+),count:(\d+),price:(\d+),score:(\d+),unitPrice:(\d+),unitScore:(\d+)/g)].map(m=>({overall:+m[1],rarity:+m[2],count:+m[3],price:+m[4],score:+m[5],unitPrice:+m[6],unitScore:+m[7]}));}
 function balancedArray(s:string,at:number):string{const assign=s.indexOf(']=',at),open=s.indexOf('[',assign>=0?assign+2:at);if(open<0)return'';let depth=0,quote='',escape=false;for(let i=open;i<s.length;i++){const c=s[i];if(quote){if(escape)escape=false;else if(c==='\\')escape=true;else if(c===quote)quote='';continue;}if(c==='"'||c==="'"){quote=c;continue;}if(c==='[')depth++;else if(c===']'&&--depth===0)return s.slice(open,i+1);}return'';}
+function currentExpiry(value:string|null):string|null{if(!value)return null;const time=Date.parse(value);if(!Number.isFinite(time))return value;const now=Date.now();return time>now+2*366*24*60*60_000?null:value;}
+function routesFor(block:string,platform:'ps5'|'pc'):SbcRoute[]{const marketAt=block.indexOf(`${platform}:`);if(marketAt<0)return[];const market=block.slice(marketAt);const at=market.indexOf('routes:');const raw=at>=0?balancedArray(market,at):'';return arrayObjects(raw,'').map(obj=>({key:quoted(obj,'key')??'route',price:number(obj,'price')??0,score:number(obj,'score')??0,cards:number(obj,'cards')??0,groups:routeGroups(obj)})).filter(route=>route.price>0&&route.cards>0&&route.groups.length).sort((a,b)=>a.price-b.price);}
 export function parseSbcList(html:string):SbcChoice[]{const choices:SbcChoice[]=[],seen=new Set<string>();for(const m of html.matchAll(/<a\b[^>]*href="(\/sbc\/(?!category\/|streamlined-solver\/)[^"]+\/)"[^>]*>([\s\S]*?)<\/a>/gi)){const url=m[1].split('?')[0];if(seen.has(url))continue;const body=m[2];const title=body.match(/<h[23][^>]*>([\s\S]*?)<\/h[23]>/i)?.[1];if(!title)continue;const name=text(title);if(!name||name.length>100)continue;const description=text(body.match(/<p[^>]*>([\s\S]*?)<\/p>/i)?.[1]??'');seen.add(url);choices.push({name,url,description:description.slice(0,180)});}return choices;}
 export function parseSbcDetail(html:string,url:string,platform:'ps5'|'pc'='ps5'):SbcDetail{
  const fallbackTitle=text(html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]??'').replace(/\s*[-|·].*$/,'')||'SBC';
  const path=url.replace(/^https?:\/\/www\.fut\.gg/,'').split('?')[0];const anchor=html.toLowerCase().indexOf(`url:"${path}"`.toLowerCase());const set=anchor>=0?html.slice(Math.max(0,anchor-4000),anchor+16000):html;
  const title=quoted(set,'name')??fallbackTitle;
  const description=quoted(set,'description')??text(html.match(/<meta\s+name="description"\s+content="([^"]*)"/i)?.[1]??'');
- const expires=quoted(set,'endTime')??quoted(set,'expiresAt');const expiresIn=quoted(set,'expiresIn');const repeat=quoted(set,'repeatRefreshIntervalText');
+ const expires=currentExpiry(quoted(set,'endTime')??quoted(set,'expiresAt'));const expiresIn=quoted(set,'expiresIn');const repeat=quoted(set,'repeatRefreshIntervalText');
  const setRewards=[...new Set([...set.matchAll(/pack:"((?:\\.|[^"\\])*)"/g)].flatMap(m=>{try{return[JSON.parse(`"${m[1]}"`)]}catch{return[]}}))];
  const challengeArray=balancedArray(set,set.indexOf('challenges:'));const challengeRows=arrayObjects(challengeArray,'');
  const challenges=challengeRows.map(row=>{
@@ -26,7 +28,20 @@ export function parseSbcDetail(html:string,url:string,platform:'ps5'|'pc'='ps5')
   const rewards=[...new Set([...row.matchAll(/pack:"((?:\\.|[^"\\])*)"/g)].flatMap(m=>{try{return[JSON.parse(`"${m[1]}"`)]}catch{return[]}}))];
   const solutionPath=quoted(row,'cheapestSolutionUrl');const regularPrice=number(row,'cheapestSolutionPrice');
   const challengeId=number(row,'eaId');const isStreamlined=bool(row,'isStreamlined');let routes:SbcRoute[]=[];let bestPrice=regularPrice;
-  if(isStreamlined&&challengeId){const pKey=`${platform}:`;const i=set.indexOf(pKey);const marketBlock=i>=0?set.slice(i,i+8000):'';const start=marketBlock.indexOf('routes:');const raw=start>=0?balancedArray(marketBlock,start):'';routes=arrayObjects(raw,'').map(obj=>({key:quoted(obj,'key')??'route',price:number(obj,'price')??0,score:number(obj,'score')??0,cards:number(obj,'cards')??0,groups:routeGroups(obj)})).filter(route=>route.price>0&&route.groups.length).sort((a,b)=>a.price-b.price);if(routes[0])bestPrice=routes[0].price;}
+  if(isStreamlined&&challengeId){
+   // Solver payloads can contain a route for every challenge in the SBC set.
+   // Match challengeEaId first; reading the first platform route can attach a
+   // full-set (100+ card) total to a single challenge.
+   const streamAt=set.indexOf('streamlinedSolutions:');const stream=streamAt>=0?set.slice(streamAt):'';const challengesAt=stream.indexOf('challenges:');
+   const challengeData=challengesAt>=0?balancedArray(stream,challengesAt):'';const rows=arrayObjects(challengeData,'');const match=rows.find(item=>number(item,'challengeEaId')===challengeId);
+   routes=routesFor(match??'',platform);
+   // Older FUT.GG payloads have one challenge and put routes directly under
+   // the solver object. Preserve that format, but never surface a full-set
+   // route as if it were one squad.
+   if(!routes.length&&!rows.length)routes=routesFor(stream,platform);
+   routes=routes.filter(route=>route.cards<=11&&route.groups.reduce((sum,g)=>sum+g.count,0)===route.cards);
+   if(routes[0])bestPrice=routes[0].price;
+  }
   return{id:challengeId,scoreRequirement:number(row,'scoreRequirement'),name:names,description:desc,requirements:req,reward:(rewards.length?rewards:setRewards).join(', '),expires,price:bestPrice,routes,solutionUrl:solutionPath?ROOT+solutionPath:null,streamlined:isStreamlined};
  }).filter(c=>c.name!=='Challenge');
  return{name:title,description,expires:expires??expiresIn,repeatable:repeat,challenges,url:ROOT+path};
