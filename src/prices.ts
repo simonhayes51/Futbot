@@ -86,6 +86,14 @@ export class PriceRepository {
       return rows[0]??null;
     });
   }
+  async playerName(playerId:string):Promise<string|null>{
+    if(!/^[1-9]\d*$/.test(playerId))return null;
+    const {rows}=await this.pool.query(`SELECT COALESCE(NULLIF(display_name,''),NULLIF(name,''),NULLIF(full_name,'')) AS name
+      FROM public.futgg_players WHERE source_player_id=$1 AND game_year=$2
+      AND COALESCE(NULLIF(display_name,''),NULLIF(name,''),NULLIF(full_name,'')) IS NOT NULL
+      ORDER BY rating DESC NULLS LAST,source_card_id LIMIT 1`,[playerId,this.year]);
+    return rows[0]?.name?String(rows[0].name):null;
+  }
   async latest(cardId: string, platform: string): Promise<Price | null> {
     const table=this.historyTable(platform);
     return this.cached('latest:'+platform+':'+cardId,30000,async()=>{

@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {fetchSbcPlayers,parseSbcDetail,parseSbcList} from './sbc.js';
+import {fetchSbcPlayers,fetchSbcSolutionNames,parseSbcDetail,parseSbcList} from './sbc.js';
 
 test('SBC list only offers real challenge pages with a title',()=>{
  const rows=parseSbcList('<a href="/sbc/category/players/">Players</a><a href="/sbc/players/27-64-mls-future-stars-player-pick/"><h3>MLS Future Stars Player Pick</h3><p>Choose a player.</p></a><a href="/sbc/players/27-64-mls-future-stars-player-pick/"><h3>MLS Future Stars Player Pick</h3></a>');
@@ -29,4 +29,11 @@ test('streamlined routes are matched to their challenge and oversized set totals
  assert.equal(detail.challenges[0].routes[0].price,22000);
  assert.equal(detail.challenges[1].routes.length,0);
  assert.notEqual(detail.challenges[1].price,129270);
+});
+
+test('FUT.GG squad solution resolves its client-loaded lineup IDs into player names',async()=>{
+ let requested='';const lineup=Array.from({length:11},(_,i)=>({group:'FIELD',playerEaId:82511+i,positionIdx:10-i}));
+ const names=await fetchSbcSolutionNames('https://www.fut.gg/27/squad-builder/a9740381-194a-4695-bbe0-9c42661e41ea/',async(input)=>{requested=String(input);return new Response(JSON.stringify({data:{data:{activeGroupPositions:lineup}}}),{status:200});},async id=>`Player ${id}`);
+ assert.equal(requested,'https://www.fut.gg/api/squads/a9740381-194a-4695-bbe0-9c42661e41ea/');
+ assert.equal(names.length,11);assert.equal(names[0],'Player 82521');assert.equal(names[10],'Player 82511');
 });
