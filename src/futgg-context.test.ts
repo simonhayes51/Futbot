@@ -45,3 +45,17 @@ test('live collector follows the manifest version and gets both public feeds', a
   assert(urls.some(url => url.endsWith('/all-evolutions.v1.ab12cd34.json')));
   assert(urls.some(url => url.endsWith('/api/fut/gallery/fc99/hub/')));
 });
+
+test('Evo metadata distinguishes the full count from samples and retains branching or chained popular paths',()=>{
+ const [evo]=normaliseEvolutions([{id:2532,name:'Frontline Flair',endTime:'2099-01-01T00:00:00Z',endSubmissionTime:'2099-02-01T00:00:00Z',numberOfPlayers:4291,eligiblePlayerItemIds:[1,2,3],trendingPlayersIds:['99_2532:1','88_42_2532'],customUnlockable:'Unlocked via the Token Store for 100 tokens',url:'/evolutions/2532-frontline-flair/',requirementsText:[{label:'Overall',value:'Max. 83'}],totalUpgradesText:[{label:'Overall',value:'+1',maxValue:'(^84)'}]}]);
+ assert.equal(evo.playerCount,4291);assert.equal(evo.eligibleCardIds.length,3);
+ assert.deepEqual(evo.popularPicks?.map(p=>[p.id,p.chained]),[['99',false],['88',true]]);
+ assert.match(evo.unlock!,/100 tokens/);assert.deepEqual(evo.requirements,['Overall: Max. 83']);
+ assert.deepEqual(evo.upgrades,['Overall: +1 (^84)']);
+ const closed=normaliseEvolutions([{id:1,endTime:'2020-01-01T00:00:00Z',endSubmissionTime:'2099-01-01T00:00:00Z'}]);assert.equal(closed.length,0);
+});
+
+test('Gallery retains every completion item and its source price without dropping unresolved card IDs',()=>{
+ const [tier]=normaliseGallery({sets:[{setId:1,costTiers:[{grade:'S',cost:600,tokens:10,items:[{eaId:1,price:100},{eaId:2,price:200},{eaId:3,price:300}]}]}]});
+ assert.equal(tier.itemCount,3);assert.deepEqual(tier.items,[{id:'1',price:100},{id:'2',price:200},{id:'3',price:300}]);
+});

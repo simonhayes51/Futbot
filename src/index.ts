@@ -213,7 +213,7 @@ async function handle(i:Interaction){
     const query=String(q).trim().toLocaleLowerCase();
     if(i.commandName==='evolutions'){
       const rows=(await fetchFutggContext(market.prices.year)).evolutions.filter(row=>!query||row.name.toLocaleLowerCase().includes(query)).slice(0,25);
-      await i.respond(rows.map(row=>({name:`${row.name} · ${row.eligibleCardIds.length} eligible`.slice(0,100),value:row.id})));return;
+      await i.respond(rows.map(row=>({name:`${row.name} · ${row.playerCount??row.eligibleCardIds.length} FUT.GG results`.slice(0,100),value:row.id})));return;
     }
     if(i.commandName==='gallery'){
       const rows=(await fetchFutggContext(market.prices.year)).gallery.filter(row=>row.coinsPerToken!==null);

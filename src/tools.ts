@@ -33,23 +33,41 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
   const context=await fetchFutggContext(year),evo=context.evolutions.find(row=>row.id===evoId);
   if(!evo)throw new Error('That Evolution is no longer open. Choose another from the command options.');
   const selectedMarket=selectedPlatform===market.platform?market:new MarketService(market.prices,selectedPlatform,market.maxAge);
-  const eligible=new Set(evo.eligibleCardIds),fresh=(await selectedMarket.snapshot()).filter(card=>eligible.has(card.id)).sort((a,b)=>a.value-b.value).slice(0,8);
-  const lines=fresh.length?fresh.map(card=>`• **${card.name} · ${card.rating??'—'} OVR** — ${coins(card.value)} coins`):await Promise.all(evo.eligibleCardIds.slice(0,8).map(async id=>{const card=await market.prices.card(id);return `• ${card?.name&&!/^unknown(?: card| player)?$/i.test(card.name)?`${card.name} · ${card.rating??'—'} OVR`:`Card ${id}`} — no fresh price`;}));
-  const close=Math.floor(Date.parse(evo.closesAt)/1000),cost=evo.coinsCost!==null?coins(evo.coinsCost)+' coins':evo.pointsCost!==null?evo.pointsCost+' points':'cost not listed';
-  const note=fresh.length?'Cheapest eligible cards with fresh prices.':'No fresh eligible-card prices are available right now; these are examples from the eligibility list.';
-  const embed=brand(selectedPlatform).setTitle('🧬 '+evo.name).setDescription(`${cost} · closes <t:${close}:R>\n\n${lines.join('\n')}\n\n${note}`).addFields({name:'ELIGIBILITY',value:`${evo.eligibleCardIds.length} cards listed as eligible by FUT.GG. Trending cards are excluded unless FUT.GG marks them eligible.`});
-  await i.editReply({embeds:[embed]});return;
+  const prices=new Map((await selectedMarket.snapshot()).map(card=>[card.id,card]));
+  const popular=evo.popularPicks??[],seen=new Set<string>();
+  const picks=(popular.length?popular:evo.eligibleCardIds.map(id=>({id,path:'',chained:false}))).filter(pick=>{if(seen.has(pick.id))return false;seen.add(pick.id);return true;}).slice(0,20);
+  const resolved=await Promise.all(picks.map(async pick=>({pick,card:prices.get(pick.id)??await market.prices.card(pick.id)})));
+  const visible=resolved.filter((row):row is typeof row&{card:Card}=>!!row.card&&!!row.card.name?.trim()&&!/^unknown(?: card| player)?$/i.test(row.card.name.trim())).slice(0,5);
+  const lines=visible.map(({pick,card},idx)=>{
+   const fresh=prices.get(pick.id),cost=pick.chained?'Existing Evo path required':fresh?`${coins(fresh.value)} coins`:'No fresh market price';
+   return `**${idx+1}. ${card.name}** · ${card.rating??'—'} base OVR · ${card.position??'—'}\n${card.rarity??'Player item'} · **${cost}**`;
+  });
+  const startBy=evo.startsBy??evo.closesAt,cost=evo.unlock|| (evo.coinsCost?`${coins(evo.coinsCost)} coins`:evo.pointsCost?`${evo.pointsCost} points`:'Free entry');
+  const embed=brand(selectedPlatform).setTitle('🧬 '+evo.name).setDescription(`**${cost}**\nStart by <t:${Math.floor(Date.parse(startBy)/1000)}:R>\n\n${popular.length?'**Top FUT.GG trending picks**':'**Available card examples**'}\n\n${lines.join('\n\n')||'Player details for these picks are not yet available.'}`);
+  if(evo.upgrades?.length)embed.addFields({name:'WHAT YOU GET',value:evo.upgrades.join(' · ').slice(0,1024)});
+  if(evo.requirements?.length)embed.addFields({name:'ENTRY REQUIREMENTS',value:evo.requirements.join(' · ').slice(0,1024)});
+  embed.addFields({name:'ABOUT THESE PICKS',value:popular.length?'Ordered by FUT.GG popularity, not cheapest price. Ratings shown are the starting card. Check the exact card and any prior Evo path before buying.':'FUT.GG supplied a short sample, not a full ranked shortlist.'});
+  if(visible[0]?.card.image?.startsWith('https://'))embed.setThumbnail(visible[0].card.image);
+  const components=evo.url?[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('View Evo and player paths').setURL(evo.url))]:[];
+  await i.editReply({embeds:[embed],components});return;
  }
  if(i.commandName==='gallery'){
-  const setId=i.options.getString('set',true),context=await fetchFutggContext(year),tiers=context.gallery.filter(row=>row.setId===setId&&row.coinsPerToken!==null).sort((a,b)=>a.coinsPerToken!-b.coinsPerToken!);
+  const setId=i.options.getString('set',true),context=await fetchFutggContext(year),tiers=context.gallery.filter(row=>row.setId===setId&&row.coinsPerToken!==null);
   if(!tiers.length)throw new Error('That Gallery set is no longer available. Choose another from the command options.');
-  const lines=await Promise.all(tiers.slice(0,8).map(async row=>{
-   const cards=await Promise.all(row.cardIds.slice(0,10).map(id=>market.prices.card(id)));
-   const names=cards.filter((card):card is Card=>!!card&&!!card.name?.trim()&&!/^unknown(?: card| player)?$/i.test(card.name.trim())).slice(0,3).map(card=>card.name).join(', ');
-   return `**${row.grade}** · ${coins(row.cost??0)} coins / ${row.tokens??'—'} tokens = **${coins(row.coinsPerToken!)} per token**${names?`\nExamples: ${names}`:''}`;
-  }));
-  const embed=brand().setTitle('🏆 '+tiers[0].name).setDescription(lines.join('\n\n')).addFields({name:'BEST VALUE',value:`${tiers[0].grade} is the lowest listed cost per token. Check the in-game requirements and card prices before spending.`});
-  await i.editReply({embeds:[embed]});return;
+  const rank=(grade:string)=>['D','C','B','A','S'].indexOf(grade.toUpperCase());
+  const best=[...tiers].sort((a,b)=>rank(b.grade)-rank(a.grade)||(a.cost??Infinity)-(b.cost??Infinity))[0];
+  const items=best.items??best.cardIds.map(id=>({id,price:null}));
+  if(items.length!==best.itemCount)throw new Error('FUT.GG returned an incomplete completion lineup. Please check the Gallery source.');
+  const cards=await Promise.all(items.map(async item=>({item,card:await market.prices.card(item.id)})));
+  const lineup=cards.sort((a,b)=>(a.item.price??Infinity)-(b.item.price??Infinity)).map(({item,card},idx)=>`${idx+1}. ${card?.name&&!/^unknown(?: card| player)?$/i.test(card.name)?card.name+' · '+(card.rating??'—')+' OVR · '+(card.rarity??'Player item'):'Card #'+item.id} — ${item.price!==null?coins(item.price)+' coins':'price unavailable'} [ID ${item.id}]`);
+  const total=items.every(item=>item.price!==null)?items.reduce((sum,item)=>sum+item.price!,0):null;
+  const intro=`**${best.grade} completion · ${coins(best.cost??0)} coins estimated**\n${best.tokens??'—'} tokens · ${coins(best.coinsPerToken!)} coins/token · ${items.length} cards\n\nFUT.GG's lowest-cost lineup for the highest available priced tier${best.grade==='S'?'':'; an S-tier solution was not supplied'}.`;
+  const all=lineup.join('\n'),preview=all.length>3300?lineup.slice(0,12).join('\n')+'\n\nFull lineup attached below.':all;
+  const embed=brand().setTitle('🏆 '+best.name+' · completion').setDescription(intro+'\n\n**BUY THESE CARDS**\n'+preview);
+  if(total!==null&&total!==best.cost)embed.addFields({name:'PRICE TOTAL',value:`Item prices sum to ${coins(total)} coins; FUT.GG reports ${coins(best.cost??0)} coins for the tier. Recheck the difference before buying.`});
+  embed.addFields({name:'PRICE CHECK',value:`FUT.GG lineup estimates, retrieved <t:${Math.floor(context.fetchedAt.getTime()/1000)}:R>. These are not live purchase quotes. No credit for cards you already own.`});
+  const text=`${best.name} — ${best.grade} completion\nFUT.GG estimated cost: ${coins(best.cost??0)} coins\nReward: ${best.tokens??'—'} tokens\nRetrieved: ${context.fetchedAt.toISOString()}\n\n${all}\n\n${total===null?'Some item prices are missing.':'Item subtotal: '+coins(total)+' coins.'}\nSource: FUT.GG Gallery hub. Verify card IDs and in-game requirements before buying.`;
+  await i.editReply({embeds:[embed],files:[new AttachmentBuilder(Buffer.from(text,'utf8'),{name:'gallery-completion.txt'})]});return;
  }
  if(i.commandName==='fodder'){
  const rating=i.options.getInteger('rating')??undefined,cards=await market.snapshot(),rows=fodderRows(cards,rating);

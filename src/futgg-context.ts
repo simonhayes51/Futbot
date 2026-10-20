@@ -2,10 +2,14 @@ type JsonObject = Record<string, unknown>;
 export type EvolutionWatch = {
   id: string; name: string; closesAt: string; coinsCost: number | null;
   pointsCost: number | null; eligibleCardIds: string[]; trendingCardIds: string[];
+  playerCount?: number | null; unlock?: string; url?: string; startsBy?: string;
+  requirements?: string[]; upgrades?: string[];
+  popularPicks?: {id: string; path: string; chained: boolean}[];
 };
 export type GalleryValue = {
   setId: string; name: string; grade: string; cost: number | null;
   tokens: number | null; coinsPerToken: number | null; itemCount: number; cardIds: string[];
+  items?: {id: string; price: number | null}[]; threshold?: number | null;
 };
 export type FutggContext = { fetchedAt: Date; evolutions: EvolutionWatch[]; gallery: GalleryValue[] };
 const asObject = (value: unknown): JsonObject => value && typeof value === 'object' && !Array.isArray(value) ? value as JsonObject : {};
@@ -13,6 +17,10 @@ const asList = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
 const asId = (value: unknown): string | null => /^[1-9]\d*$/.test(String(value ?? '')) ? String(value) : null;
 const asNumber = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const nestedData = (value: unknown): unknown => asObject(value).data ?? value;
+const readable = (value: unknown): string[] => asList(value).flatMap(raw => {
+  const row=asObject(raw);
+  return typeof row.label==='string'&&typeof row.value==='string'?[`${row.label}: ${row.value}${typeof row.maxValue==='string'?' '+row.maxValue:''}`]:[];
+});
 
 export function normaliseEvolutions(payload: unknown, now = Date.now()): EvolutionWatch[] {
   return asList(nestedData(payload)).flatMap(raw => {
@@ -21,15 +29,24 @@ export function normaliseEvolutions(payload: unknown, now = Date.now()): Evoluti
     const end = row.endSubmissionTime ?? row.endTime;
     const closes = typeof end === 'string' ? Date.parse(end) : NaN;
     if (!Number.isFinite(closes) || closes <= now) return [];
+    if(typeof row.endTime==='string'&&Date.parse(row.endTime)<=now)return [];
     const eligibleCardIds = [...new Set(asList(row.eligiblePlayerItemIds).map(asId).filter((v): v is string => !!v))];
+    const popularPicks = asList(row.trendingPlayersIds).flatMap(value => {
+      const path=String(value),match=path.match(/^(\d+)(?:_\d+(?::\d+)?)+$/);
+      return match?[{id:match[1],path,chained:path.split('_').length>2}]:[];
+    });
     const trendingCardIds = [...new Set(asList(row.trendingPlayersIds).flatMap(value => {
-      const match = String(value).match(/^(\d+)(?:_\d+)*$/);
+      const match = String(value).match(/^(\d+)(?:_\d+(?::\d+)?)*$/);
       const cardId = match && asId(match[1]);
       return cardId ? [cardId] : [];
     }))].filter(cardId => !eligibleCardIds.includes(cardId));
     return [{id, name: typeof row.name === 'string' ? row.name.slice(0, 120) : `Evolution ${id}`,
       closesAt: new Date(closes).toISOString(), coinsCost: asNumber(row.coinsCost), pointsCost: asNumber(row.pointsCost),
-      eligibleCardIds, trendingCardIds}];
+      eligibleCardIds, trendingCardIds, popularPicks, playerCount:asNumber(row.numberOfPlayers),
+      unlock:typeof row.customUnlockable==='string'?row.customUnlockable:undefined,
+      startsBy:typeof row.endTime==='string'&&Number.isFinite(Date.parse(row.endTime))?row.endTime:undefined,
+      url:typeof row.url==='string'&&/^\/evolutions\/[a-z0-9-]+\/$/.test(row.url)?'https://www.fut.gg'+row.url:undefined,
+      requirements:readable(row.requirementsText),upgrades:readable(row.totalUpgradesText)}];
   }).sort((a, b) => Date.parse(a.closesAt) - Date.parse(b.closesAt));
 }
 
@@ -49,6 +66,8 @@ export function normaliseGallery(payload: unknown): GalleryValue[] {
         grade: typeof value.grade === 'string' ? value.grade.slice(0, 40) : 'Unspecified',
         cost, tokens, coinsPerToken: cost !== null && cost > 0 && tokens !== null && tokens > 0 ? Math.ceil(cost / tokens) : null,
         itemCount: asList(value.items).length,
+        threshold:asNumber(value.threshold),
+        items:asList(value.items).flatMap(item=>{const entry=asObject(item),id=asId(entry.eaId);return id?[{id,price:asNumber(entry.price)}]:[];}),
         cardIds: [...new Set(asList(value.items).map(item => asId(asObject(item).eaId)).filter((id): id is string => !!id))]});
     }
   }
