@@ -1,6 +1,6 @@
 export type Direction = 'below' | 'above';
 export type Price = { cardId: string; platform: string; value: number; capturedAt: Date };
-export type Card = { id: string; name: string; rating: number | null; position: string | null; rarity: string | null; club: string | null; league?: string | null; image: string | null };
+export type Card = { id: string; name: string; rating: number | null; position: string | null; rarity: string | null; club: string | null; league?: string | null; image: string | null; versionDetailsMissing?: boolean };
 export function meetsTarget(price: number, target: number, direction: Direction) {
   return direction === 'below' ? price <= target : price >= target;
 }

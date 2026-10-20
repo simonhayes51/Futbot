@@ -49,18 +49,27 @@ export class PriceRepository {
     return rows[0] || null;});
   }
   async galleryCard(id:string):Promise<Card|null>{
-    const known=await this.card(id);if(namedCard(known))return known;
-    if(!/^[1-9]\d*$/.test(id))return null;
+    if(!/^[1-9]\d{0,15}$/.test(id))return null;
     return this.cached('gallery-card:'+id,300000,async()=>{
-      // EA's version offset is used only to find candidate players. The API
-      // response must independently confirm the exact requested item and year.
-      const {rows}=await this.pool.query(`SELECT DISTINCT source_player_id::text AS "playerId"
-        FROM public.futgg_players WHERE game_year=$1 AND source_player_id IS NOT NULL
-        AND mod(source_card_id::bigint,16777216)=mod($2::bigint,16777216) LIMIT 3`,[this.year,id]);
-      const candidates=[...new Set([...rows.map(row=>String(row.playerId)),String(BigInt(id)%16777216n)])].slice(0,3);
-      const versions=await Promise.all([fetchHolographicCard(this.year,id),...candidates.map(playerId=>fetchExactVersion(this.year,playerId,id))]);
-      for(const card of versions)if(namedCard(card))return card;
-      return known;
+      const known=await this.card(id).catch(error=>{logFailure('Gallery exact card lookup failed',error);return null;});
+      if(namedCard(known))return known;
+      // EA item versions share a base player ID. Use the indexed player column
+      // for the NAME only: the Gallery feed still owns this exact item's price.
+      // Do not borrow a normal version's rating, finish, club or artwork.
+      const playerId=String(BigInt(id)%16777216n);
+      const {rows}=await this.pool.query(`SELECT COALESCE(NULLIF(display_name,''),NULLIF(name,''),NULLIF(full_name,'')) AS name
+        FROM public.futgg_players WHERE source_player_id=$1 AND game_year=$2
+        AND COALESCE(NULLIF(display_name,''),NULLIF(name,''),NULLIF(full_name,'')) IS NOT NULL
+        ORDER BY CASE WHEN source_card_id=$1 THEN 0 ELSE 1 END,source_card_id LIMIT 8`,[playerId,this.year])
+        .catch(error=>{logFailure('Gallery player name lookup failed',error);return {rows:[]};});
+      for(const row of rows){
+        const card:Card={id,name:row.name,rating:null,position:null,rarity:null,club:null,image:null,versionDetailsMissing:true};
+        if(namedCard(card))return card;
+      }
+      // Optional public lookup when the player itself has not been synced yet.
+      // A blocked source or missing version must not abort the shopping list.
+      const versions=await Promise.all([fetchHolographicCard(this.year,id),fetchExactVersion(this.year,playerId,id)]);
+      return versions.find(namedCard)??null;
     });
   }
   async evoIdentity(cardId:string):Promise<{playerId:string;url:string}|null>{

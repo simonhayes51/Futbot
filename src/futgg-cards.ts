@@ -3,7 +3,7 @@ import type {Card} from './domain.js';
 const object=(v:unknown):Record<string,unknown>=>v&&typeof v==='object'&&!Array.isArray(v)?v as Record<string,unknown>:{};
 const text=(v:unknown)=>typeof v==='string'?v.trim():'';
 const number=(v:unknown)=>typeof v==='number'&&Number.isFinite(v)?v:null;
-export const namedCard=(card:Card|null|undefined):card is Card=>!!card&&!!card.name?.trim()&&!/^(unknown(?: card| player)?|card #\d+)$/i.test(card.name.trim());
+export const namedCard=(card:Card|null|undefined):card is Card=>!!card&&!!card.name?.trim()&&!/^(unknown(?: card| player)?(?:\s*#?\s*\d+)?|(?:card|player|item)\s*#?\s*\d+|\d+)$/i.test(card.name.trim());
 
 // Only accept the exact EA item, including its finish. Never substitute a normal
 // card's name/rating/price for an unverified holographic version.
