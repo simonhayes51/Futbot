@@ -37,3 +37,11 @@ test('FUT.GG squad solution resolves its client-loaded lineup IDs into player na
  assert.equal(requested,'https://www.fut.gg/api/squads/a9740381-194a-4695-bbe0-9c42661e41ea/');
  assert.equal(names.length,11);assert.equal(names[0],'Player 82521');assert.equal(names[10],'Player 82511');
 });
+
+test('FUT.GG squad solution keeps all 11 players when some local names are missing',async()=>{
+ const lineup=Array.from({length:11},(_,i)=>({group:'FIELD',playerEaId:82511+i,positionIdx:i}));
+ const names=await fetchSbcSolutionNames('https://www.fut.gg/27/squad-builder/a9740381-194a-4695-bbe0-9c42661e41ea/',async()=>new Response(JSON.stringify({data:{data:{activeGroupPositions:lineup}}}),{status:200}),async id=>Number(id)>=82515?null:`Player ${id}`);
+ assert.equal(names.length,11);
+ assert.deepEqual(names.slice(0,4),['Player 82511','Player 82512','Player 82513','Player 82514']);
+ assert.deepEqual(names.slice(4),Array.from({length:7},(_,i)=>`Unknown card (${82515+i})`));
+});
