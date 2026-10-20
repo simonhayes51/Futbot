@@ -8,7 +8,8 @@ import {AsyncLocalStorage} from 'node:async_hooks';
 import {MarketService} from './market.js';
 import {startWeb} from './web.js';
 import type {Server} from 'node:http';
-import {extraCommands,handleTool,handleFutggSelect} from './tools.js';
+import {extraCommands,handleTool} from './tools.js';
+import {fetchFutggContext} from './futgg-context.js';
 import {guildSettings,defaultBrand,watch,type GuildSettings} from './settings.js';
 import { Client, MessageFlags, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, type Interaction } from 'discord.js';
 import { PriceRepository,isMiscItemType,type MiscItemType } from './prices.js';
@@ -209,10 +210,21 @@ async function handle(i:Interaction){
       const choices=items.filter(item=>item.item_type===type&&(!query||item.item_id.includes(query)||(item.display_name||miscCatalog.label(type,item.item_id)).toLocaleLowerCase().includes(query))).slice(0,25).map(item=>({name:(item.display_name||miscCatalog.label(type,item.item_id)).slice(0,100),value:item.item_id}));
       await i.respond(choices);return;
     }
+    const query=String(q).trim().toLocaleLowerCase();
+    if(i.commandName==='evolutions'){
+      const rows=(await fetchFutggContext(market.prices.year)).evolutions.filter(row=>!query||row.name.toLocaleLowerCase().includes(query)).slice(0,25);
+      await i.respond(rows.map(row=>({name:`${row.name} · ${row.eligibleCardIds.length} eligible`.slice(0,100),value:row.id})));return;
+    }
+    if(i.commandName==='gallery'){
+      const rows=(await fetchFutggContext(market.prices.year)).gallery.filter(row=>row.coinsPerToken!==null);
+      const sets=new Map<string,{name:string;best:number;tiers:number}>();
+      for(const row of rows){const current=sets.get(row.setId);if(!current)sets.set(row.setId,{name:row.name,best:row.coinsPerToken!,tiers:1});else{current.best=Math.min(current.best,row.coinsPerToken!);current.tiers++;}}
+      const choices=[...sets.entries()].filter(([,set])=>!query||set.name.toLocaleLowerCase().includes(query)).sort((a,b)=>a[1].best-b[1].best).slice(0,25).map(([id,set])=>({name:`${set.name} · best ${set.best.toLocaleString()} coins/token`.slice(0,100),value:id}));
+      await i.respond(choices);return;
+    }
     if(q.length<2){await i.respond([]);return;}
     const cards=await prices.search(q);await i.respond(cards.map(c=>({name:`${c.name} · ${c.rating??'?'} ${c.position??''} · ${c.rarity??''}`.slice(0,100),value:c.id})));return;
   }
-  if(i.isStringSelectMenu()&&i.customId.startsWith('futgg:')){await handleFutggSelect(i,market,brand);return;}
   if(i.isStringSelectMenu()&&i.customId==='feedcard'){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showPrice(await resolveCard(i.values[0])));return;}
   if(i.isStringSelectMenu()&&i.customId==='miscfeeditem'){await i.deferReply({flags:MessageFlags.Ephemeral});const [type,id,pricePlatform]=i.values[0].split(':');if(isMiscItemType(type))await i.editReply(await showMiscPrice(type,id,24,pricePlatform));else await i.editReply('That consumable selection is invalid.');return;}
   if(i.isButton()){
