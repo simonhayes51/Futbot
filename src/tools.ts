@@ -1,4 +1,4 @@
-import {SlashCommandBuilder,AttachmentBuilder,ActionRowBuilder,StringSelectMenuBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,type ChatInputCommandInteraction,type StringSelectMenuInteraction} from 'discord.js';
+import {SlashCommandBuilder,AttachmentBuilder,ActionRowBuilder,StringSelectMenuBuilder,ButtonBuilder,ButtonStyle,EmbedBuilder,type ChatInputCommandInteraction} from 'discord.js';
 import {MarketService,type MarketCard} from './market.js';
 import {fodderRows,movers} from './market.js';
 import {fodderBoard,consumablesBoard,rankConsumables} from './boards.js';
@@ -6,12 +6,12 @@ import {watch,watchedMarkets,guildSettings} from './settings.js';
 import type {AlertRepository} from './alerts.js';
 import type {Card} from './domain.js';
 import {coins,isFresh} from './domain.js';
-import {fetchFutggContext,type GalleryValue} from './futgg-context.js';
+import {fetchFutggContext} from './futgg-context.js';
 const player=(o:any)=>o.setName('player').setDescription('Choose an exact card').setRequired(true).setAutocomplete(true);
 export const extraCommands=[
  new SlashCommandBuilder().setName('fodder').setDescription('🧱 Cheapest fresh cards by rating, with a visual price ladder'),
- new SlashCommandBuilder().setName('evolutions').setDescription('🧬 Open Evolutions with eligible cards and fresh prices').addStringOption(o=>o.setName('market').setDescription('Price market for card candidates').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})),
- new SlashCommandBuilder().setName('gallery').setDescription('🏆 FUT.GG Gallery tiers ranked by coins per token'),
+ new SlashCommandBuilder().setName('evolutions').setDescription('🧬 Find the best cards for an Evolution').addStringOption(o=>o.setName('evolution').setDescription('Choose an open Evolution').setRequired(true).setAutocomplete(true)).addStringOption(o=>o.setName('market').setDescription('Price market for card recommendations').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})),
+ new SlashCommandBuilder().setName('gallery').setDescription('🏆 Find the best token value in a Gallery set').addStringOption(o=>o.setName('set').setDescription('Choose a Gallery set').setRequired(true).setAutocomplete(true)),
  new SlashCommandBuilder().setName('consumables').setDescription('🧴 Top consumable price rises and drops').addStringOption(o=>o.setName('market').setDescription('Choose the price market').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})).addStringOption(o=>o.setName('category').setDescription('Limit the board to a category').addChoices({name:'All consumables',value:'all'},{name:'Managers',value:'manager'},{name:'Manager leagues',value:'manager_league'},{name:'Chemistry styles',value:'chemistry_style'})).addIntegerOption(o=>o.setName('rating').setDescription('Optional exact rating, e.g. 85').setMinValue(75).setMaxValue(99)),
  new SlashCommandBuilder().setName('movers').setDescription('📈 Biggest rises or falls against an observation near 24 hours ago').addStringOption(o=>o.setName('direction').setDescription('Market direction').addChoices({name:'📈 Risers',value:'risers'},{name:'📉 Fallers',value:'fallers'})),
  new SlashCommandBuilder().setName('budget').setDescription('💎 Fresh-priced players within your coin budget').addIntegerOption(o=>o.setName('coins').setDescription('Maximum price').setRequired(true).setMinValue(1).setMaxValue(15000000)).addStringOption(o=>o.setName('position').setDescription('Primary position, e.g. ST or CM').setMaxLength(4)).addIntegerOption(o=>o.setName('rating').setDescription('Minimum rating').setMinValue(75).setMaxValue(99)),
@@ -25,49 +25,31 @@ export const extraCommands=[
  new SlashCommandBuilder().setName('help').setDescription('📖 All FutBot tools and how to use them')
 ];
 export function cardLines(cards:MarketCard[]){return cards.slice(0,10).map((c,i)=>`**${String(i+1).padStart(2,'0')} · ${c.name.replace(/[*_`~|\\]/g,'')}** · ${c.rating??'—'} ${c.position??''}\n🪙 **${coins(c.value)}**${c.change===null?'':` · ${c.change>=0?'📈 +':'📉 '}${c.change.toFixed(1)}%`}`).join('\n\n')||'No fresh prices match. Try a different filter or check the collector.';}
-export async function handleFutggSelect(i:StringSelectMenuInteraction,market:MarketService,brand:(pricePlatform?:string)=>EmbedBuilder){
- const [kind,platform='ps5']=i.customId.split(':').slice(1);
- const context=await fetchFutggContext(market.prices.year);
- if(kind==='evolution'){
-  const evo=context.evolutions.find(row=>row.id===i.values[0]);
-  if(!evo)throw new Error('That Evolution is no longer open. Run /evolutions again.');
-  const selectedMarket=platform===market.platform?market:new MarketService(market.prices,platform,market.maxAge);
+export async function handleTool(i:ChatInputCommandInteraction,market:MarketService,repo:AlertRepository,brand:(pricePlatform?:string)=>EmbedBuilder,resolve:(id:string)=>Promise<Card>,limits={watch:20}){
+ const year=market.prices.year,platform=market.platform;
+ if(i.commandName==='evolutions'){
+  const selectedPlatform=i.options.getString('market')??platform,evoId=i.options.getString('evolution',true);
+  if(!['ps5','pc'].includes(selectedPlatform))throw new Error('Choose Console or PC.');
+  const context=await fetchFutggContext(year),evo=context.evolutions.find(row=>row.id===evoId);
+  if(!evo)throw new Error('That Evolution is no longer open. Choose another from the command options.');
+  const selectedMarket=selectedPlatform===market.platform?market:new MarketService(market.prices,selectedPlatform,market.maxAge);
   const eligible=new Set(evo.eligibleCardIds),fresh=(await selectedMarket.snapshot()).filter(card=>eligible.has(card.id)).sort((a,b)=>a.value-b.value).slice(0,8);
   const lines=fresh.length?fresh.map(card=>`• **${card.name} · ${card.rating??'—'} OVR** — ${coins(card.value)} coins`):await Promise.all(evo.eligibleCardIds.slice(0,8).map(async id=>{const card=await market.prices.card(id);return `• ${card?.name&&!/^unknown(?: card| player)?$/i.test(card.name)?`${card.name} · ${card.rating??'—'} OVR`:`Card ${id}`} — no fresh price`;}));
   const close=Math.floor(Date.parse(evo.closesAt)/1000),cost=evo.coinsCost!==null?coins(evo.coinsCost)+' coins':evo.pointsCost!==null?evo.pointsCost+' points':'cost not listed';
   const note=fresh.length?'Cheapest eligible cards with fresh prices.':'No fresh eligible-card prices are available right now; these are examples from the eligibility list.';
-  await i.update({embeds:[brand(platform).setTitle('🧬 '+evo.name).setDescription(`${cost} · closes <t:${close}:R>\n\n${lines.join('\n')}\n\n${note}`).addFields({name:'ELIGIBILITY',value:`${evo.eligibleCardIds.length} cards listed as eligible by FUT.GG. Trending cards are excluded unless FUT.GG marks them eligible.`})],components:[]});return;
+  const embed=brand(selectedPlatform).setTitle('🧬 '+evo.name).setDescription(`${cost} · closes <t:${close}:R>\n\n${lines.join('\n')}\n\n${note}`).addFields({name:'ELIGIBILITY',value:`${evo.eligibleCardIds.length} cards listed as eligible by FUT.GG. Trending cards are excluded unless FUT.GG marks them eligible.`});
+  await i.editReply({embeds:[embed]});return;
  }
- if(kind==='gallery'){
-  const tiers=context.gallery.filter(row=>row.setId===i.values[0]&&row.coinsPerToken!==null).sort((a,b)=>a.coinsPerToken!-b.coinsPerToken!);
-  if(!tiers.length)throw new Error('That Gallery set is no longer available. Run /gallery again.');
+ if(i.commandName==='gallery'){
+  const setId=i.options.getString('set',true),context=await fetchFutggContext(year),tiers=context.gallery.filter(row=>row.setId===setId&&row.coinsPerToken!==null).sort((a,b)=>a.coinsPerToken!-b.coinsPerToken!);
+  if(!tiers.length)throw new Error('That Gallery set is no longer available. Choose another from the command options.');
   const lines=await Promise.all(tiers.slice(0,8).map(async row=>{
-   const cards=await Promise.all(row.cardIds.map(id=>market.prices.card(id)));
+   const cards=await Promise.all(row.cardIds.slice(0,10).map(id=>market.prices.card(id)));
    const names=cards.filter((card):card is Card=>!!card&&!!card.name?.trim()&&!/^unknown(?: card| player)?$/i.test(card.name.trim())).slice(0,3).map(card=>card.name).join(', ');
    return `**${row.grade}** · ${coins(row.cost??0)} coins / ${row.tokens??'—'} tokens = **${coins(row.coinsPerToken!)} per token**${names?`\nExamples: ${names}`:''}`;
   }));
-  await i.update({embeds:[brand().setTitle('🏆 '+tiers[0].name).setDescription(lines.join('\n\n')).addFields({name:'BEST VALUE',value:`${tiers[0].grade} is the lowest listed cost per token. Check the in-game requirements and card prices before spending.`})],components:[]});return;
- }
- await i.deferUpdate();
-}
-export async function handleTool(i:ChatInputCommandInteraction,market:MarketService,repo:AlertRepository,brand:(pricePlatform?:string)=>EmbedBuilder,resolve:(id:string)=>Promise<Card>,limits={watch:20}){
- const year=market.prices.year,platform=market.platform;
- if(i.commandName==='evolutions'){
-  const selectedPlatform=i.options.getString('market')??platform;
-  if(!['ps5','pc'].includes(selectedPlatform))throw new Error('Choose Console or PC.');
-  const context=await fetchFutggContext(year),rows=context.evolutions.slice(0,25);
-  if(!rows.length){await i.editReply({embeds:[brand().setTitle('🧬 NO OPEN EVOLUTIONS').setDescription('FUT.GG currently lists no open Evolutions for this game year.')]});return;}
-  const choices=rows.map(evo=>({label:evo.name.slice(0,100),description:`${evo.eligibleCardIds.length} eligible cards · closes ${new Date(evo.closesAt).toLocaleDateString('en-GB')}`.slice(0,100),value:evo.id}));
-  const menu=new StringSelectMenuBuilder().setCustomId('futgg:evolution:'+selectedPlatform).setPlaceholder('Choose an Evolution to see the best eligible cards').addOptions(choices);
-  await i.editReply({embeds:[brand(selectedPlatform).setTitle('🧬 CHOOSE AN EVOLUTION').setDescription('Pick an Evolution below. FutBot will show its cheapest eligible cards with fresh prices, where available.')],components:[new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)]});return;
- }
- if(i.commandName==='gallery'){
-  const context=await fetchFutggContext(year),rows=context.gallery.filter(row=>row.coinsPerToken!==null);
-  const groups=new Map<string,GalleryValue[]>();for(const row of rows)groups.set(row.setId,[...(groups.get(row.setId)??[]),row]);
-  const sets=[...groups.entries()].slice(0,25);
-  if(!sets.length){await i.editReply({embeds:[brand().setTitle('🏆 GALLERY DATA UNAVAILABLE').setDescription('FUT.GG returned no Gallery choices with a positive cost and token reward.')]});return;}
-  const menu=new StringSelectMenuBuilder().setCustomId('futgg:gallery').setPlaceholder('Choose a Gallery set to compare its best tiers').addOptions(sets.map(([setId,tiers])=>({label:tiers[0].name.slice(0,100),description:`${tiers.length} tiers · best ${coins(Math.min(...tiers.map(t=>t.coinsPerToken!)))} per token`.slice(0,100),value:setId})));
-  await i.editReply({embeds:[brand().setTitle('🏆 CHOOSE A GALLERY SET').setDescription('Pick a set below to compare its tiers and find the best token value.')],components:[new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(menu)]});return;
+  const embed=brand().setTitle('🏆 '+tiers[0].name).setDescription(lines.join('\n\n')).addFields({name:'BEST VALUE',value:`${tiers[0].grade} is the lowest listed cost per token. Check the in-game requirements and card prices before spending.`});
+  await i.editReply({embeds:[embed]});return;
  }
  if(i.commandName==='fodder'){
  const rating=i.options.getInteger('rating')??undefined,cards=await market.snapshot(),rows=fodderRows(cards,rating);
