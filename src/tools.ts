@@ -8,13 +8,15 @@ import type {Card} from './domain.js';
 import {coins,isFresh} from './domain.js';
 import {fetchFutggContext} from './futgg-context.js';
 import {fetchPlayerPaths,pathUrl} from './evo-paths.js';
+import {startGallery} from './gallery-view.js';
+import {evoText,shortUnlock} from './evo-copy.js';
 const player=(o:any)=>o.setName('player').setDescription('Choose an exact card').setRequired(true).setAutocomplete(true);
 export const extraCommands=[
  new SlashCommandBuilder().setName('fodder').setDescription('🧱 Cheapest fresh cards by rating, with a visual price ladder'),
- new SlashCommandBuilder().setName('evolutions').setDescription('🧬 Find the best cards for an Evolution').addStringOption(o=>o.setName('evolution').setDescription('Choose an open Evolution').setRequired(true).setAutocomplete(true)).addStringOption(o=>o.setName('market').setDescription('Price market for card recommendations').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})),
- new SlashCommandBuilder().setName('evolution').setDescription('🧬 Find the best cards for an Evolution').addStringOption(o=>o.setName('evolution').setDescription('Choose an open Evolution').setRequired(true).setAutocomplete(true)).addStringOption(o=>o.setName('market').setDescription('Price market for card recommendations').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})),
- new SlashCommandBuilder().setName('evo').setDescription('🧬 Find the best available Evolution paths for an exact player card').addStringOption(player).addIntegerOption(o=>o.setName('max_evos').setDescription('Maximum Evolutions per path (default 3)').setMinValue(1).setMaxValue(3)).addIntegerOption(o=>o.setName('budget').setDescription('Maximum Evo coin fees; excludes buying the card and other unlocks').setMinValue(0).setMaxValue(15000000)).addStringOption(o=>o.setName('market').setDescription('Market for the starting card price').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})),
- new SlashCommandBuilder().setName('gallery').setDescription('🏆 Find the best token value in a Gallery set').addStringOption(o=>o.setName('set').setDescription('Choose a Gallery set').setRequired(true).setAutocomplete(true)),
+ new SlashCommandBuilder().setName('evo').setDescription('🧬 Find an Evo or plan a player’s upgrades')
+ .addSubcommand(s=>s.setName('info').setDescription('See Evo upgrades, requirements and popular players').addStringOption(o=>o.setName('evolution').setDescription('Choose an open Evo').setRequired(true).setAutocomplete(true)).addStringOption(o=>o.setName('market').setDescription('Card price market').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})))
+ .addSubcommand(s=>s.setName('player').setDescription('Find upgrade routes for a specific player card').addStringOption(player).addIntegerOption(o=>o.setName('max_evos').setDescription('Most Evos in one route (1–3)').setMinValue(1).setMaxValue(3)).addIntegerOption(o=>o.setName('budget').setDescription('Max Evo coin fees; buying the player costs extra').setMinValue(0).setMaxValue(15000000)).addStringOption(o=>o.setName('market').setDescription('Starting card price market').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'}))),
+ new SlashCommandBuilder().setName('gallery').setDescription('🏆 Choose a Gallery and see the full shopping list').addStringOption(o=>o.setName('set').setDescription('Choose a Gallery').setRequired(true).setAutocomplete(true)).addStringOption(o=>o.setName('tier').setDescription('Target tier (default: highest available)').addChoices(...['S','A','B','C','D'].map(value=>({name:value+' tier',value})))),
  new SlashCommandBuilder().setName('consumables').setDescription('🧴 Top consumable price rises and drops').addStringOption(o=>o.setName('market').setDescription('Choose the price market').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})).addStringOption(o=>o.setName('category').setDescription('Limit the board to a category').addChoices({name:'All consumables',value:'all'},{name:'Managers',value:'manager'},{name:'Manager leagues',value:'manager_league'},{name:'Chemistry styles',value:'chemistry_style'})).addIntegerOption(o=>o.setName('rating').setDescription('Optional exact rating, e.g. 85').setMinValue(75).setMaxValue(99)),
  new SlashCommandBuilder().setName('movers').setDescription('📈 Biggest rises or falls against an observation near 24 hours ago').addStringOption(o=>o.setName('direction').setDescription('Market direction').addChoices({name:'📈 Risers',value:'risers'},{name:'📉 Fallers',value:'fallers'})),
  new SlashCommandBuilder().setName('budget').setDescription('💎 Fresh-priced players within your coin budget').addIntegerOption(o=>o.setName('coins').setDescription('Maximum price').setRequired(true).setMinValue(1).setMaxValue(15000000)).addStringOption(o=>o.setName('position').setDescription('Primary position, e.g. ST or CM').setMaxLength(4)).addIntegerOption(o=>o.setName('rating').setDescription('Minimum rating').setMinValue(75).setMaxValue(99)),
@@ -30,36 +32,37 @@ export const extraCommands=[
 export function cardLines(cards:MarketCard[]){return cards.slice(0,10).map((c,i)=>`**${String(i+1).padStart(2,'0')} · ${c.name.replace(/[*_`~|\\]/g,'')}** · ${c.rating??'—'} ${c.position??''}\n🪙 **${coins(c.value)}**${c.change===null?'':` · ${c.change>=0?'📈 +':'📉 '}${c.change.toFixed(1)}%`}`).join('\n\n')||'No fresh prices match. Try a different filter or check the collector.';}
 export async function handleTool(i:ChatInputCommandInteraction,market:MarketService,repo:AlertRepository,brand:(pricePlatform?:string)=>EmbedBuilder,resolve:(id:string)=>Promise<Card>,limits={watch:20}){
  const year=market.prices.year,platform=market.platform;
- if(i.commandName==='evo'){
+ if(i.commandName==='evo'&&i.options.getSubcommand()==='player'){
   const card=await resolve(i.options.getString('player',true)),identity=await market.prices.evoIdentity(card.id);
   if(!identity)throw new Error('This card is missing its FUT.GG player identity. Choose another exact card.');
   const maxEvos=i.options.getInteger('max_evos')??3,budget=i.options.getInteger('budget'),selectedPlatform=i.options.getString('market')??platform;
   if(!['ps5','pc'].includes(selectedPlatform))throw new Error('Choose Console or PC.');
   const selectedMarket=selectedPlatform===platform?market:new MarketService(market.prices,selectedPlatform,market.maxAge);
   const source=pathUrl(identity.url),sourceUrl=source?new URL(source).origin+new URL(source).pathname.split('/').slice(0,3).join('/')+'/evolutions/':null;
-  const sourceButton=sourceUrl?[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('View player Evolutions on FUT.GG').setURL(sourceUrl))]:[];
+  const sourceButton=sourceUrl?[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('See player on FUT.GG').setURL(sourceUrl))]:[];
   let result;
-  try{result=await fetchPlayerPaths(year,identity.playerId,card.id,maxEvos);}catch(error){await i.editReply({embeds:[brand(selectedPlatform).setTitle('🧬 PATH LOOKUP UNAVAILABLE').setDescription(error instanceof Error?error.message:'Could not fetch Evolution paths.')],components:sourceButton});return;}
+  try{result=await fetchPlayerPaths(year,identity.playerId,card.id,maxEvos);}catch(error){await i.editReply({embeds:[brand(selectedPlatform).setTitle('🧬 Routes unavailable').setDescription(error instanceof Error?error.message:'Could not fetch Evolution paths.')],components:sourceButton});return;}
   const eligible=result.paths.filter(p=>budget===null||p.coins!==null&&p.coins<=budget),top=eligible.slice(0,3);
   const cheapest=eligible.filter(p=>p.coins!==null&&!p.unlocks.length).sort((a,b)=>a.coins!-b.coins!)[0];
   if(cheapest&&!top.some(p=>p.id===cheapest.id))top.push(cheapest);
   const base=(await selectedMarket.snapshot().catch(()=>[])).find(c=>c.id===card.id);
-  const coverage=result.complete?`Compared ${eligible.length} matching, startable paths from ${result.fetched} returned results.`:`Partial search: ${result.fetched}${result.total!==null?' of '+result.total:''} results loaded. Recommendations cover those results only.`;
-  const embed=brand(selectedPlatform).setTitle('🧬 '+card.name+' · best Evo paths').setDescription(`${card.rating??'—'} OVR · ${card.rarity??'Player item'} · ${card.position??'—'}\nStarting card: ${base?coins(base.value)+' coins':'no fresh market price'}\nUp to ${maxEvos} Evos per path${budget!==null?' · '+coins(budget)+' coin fee limit':''}\n\n${coverage}`);
-  if(!top.length){embed.addFields({name:'NO MATCHING PATHS',value:'FUT.GG returned no currently startable paths matching this exact card and budget. Try a higher budget or another card version.'});}
+  const coverage=result.complete?`${eligible.length} available routes compared.`:`Search incomplete · ${result.fetched}${result.total!==null?' of '+result.total:''} results returned.`;
+  const embed=brand(selectedPlatform).setTitle('🧬 '+evoText(card.name)+' · Evo routes').setDescription(`${card.rating??'—'} OVR · ${evoText(card.rarity??'Player item')} · ${card.position??'—'}\n**Starting card: ${base?coins(base.value)+' coins':'price unavailable'}**\n\n${coverage}${budget!==null?' · '+coins(budget)+' coin fee limit':''}`);
+  if(!top.length){embed.addFields({name:'No routes found',value:'Try another card version, a higher budget or more Evos per route.'});}
   const buttons:ButtonBuilder[]=[];
   for(const [index,p]of top.entries()){
-   const isBudget=index===3,stats=p.stats.filter(s=>s.after!==null).map(s=>`${s.label} ${s.before??'—'}→${s.after}`).join(' · ');
-   const costs=p.coins===null?'Coin fees not listed':p.coins===0?'0 coin fees':coins(p.coins)+' coin fees';
-   const value=[p.names.map((name,n)=>`${n+1}. ${name}`).join(' → ').slice(0,280),`**${p.startingOverall??'—'} → ${p.overall??'—'} OVR · GG ${p.ggRating?.toFixed(1)??'unrated'}**`,stats,`${p.skills??'—'}★ skills · ${p.weakFoot??'—'}★ weak foot`,p.upgrades.join(' · ').slice(0,150),`**${costs}**${p.points?' / '+coins(p.points)+' FC points':''}`,p.unlocks.length?'Unlocks: '+p.unlocks.join(' · ').slice(0,130):'',`First deadline <t:${Math.floor(p.startBy/1000)}:R>`,p.training?'Training: '+p.training.slice(0,60):'',p.branches?'Has branch choices — follow the exact linked path.':''].filter(Boolean).join('\n');
-   embed.addFields({name:isBudget?'💰 LOWER COIN COST ALTERNATIVE':`${index+1}. ${index===0?'TOP RATED PATH':'ALTERNATIVE PATH'}`,value});
-   buttons.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(isBudget?'Lower cost path':`Path ${index+1} · finished card`).setURL(p.url));
+   const isBudget=index===3,stats=p.stats.filter(s=>s.after!==null&&s.after!==s.before).map(s=>`${s.label} ${s.before??'—'} → ${s.after}`).join(' · ');
+   const costs=p.coins===null?'Fees unavailable':p.coins===0?'No coin fees':coins(p.coins)+' coin fees';
+   const changes=p.upgrades.map(evoText).join(' · ').slice(0,220);
+   const value=[p.names.map(evoText).join(' → ').slice(0,250),`**${p.startingOverall===p.overall?(p.overall??'—'):((p.startingOverall??'—')+' → '+(p.overall??'—'))} OVR · ${p.ggRating!==null?'GG score '+p.ggRating.toFixed(1):'GG score unavailable'}**`,stats,changes,`**${costs}**${p.points?' / '+coins(p.points)+' FC Points':''}`,p.unlocks.length?'🔒 '+p.unlocks.map(shortUnlock).join(' · ').slice(0,200):'',`Entry closes <t:${Math.floor(p.startBy/1000)}:R>`,p.training?'Training: '+evoText(p.training).slice(0,70):'',p.branches?'Follow the choices in the linked route.':''].filter(Boolean).join('\n');
+   embed.addFields({name:isBudget?'💰 Lower coin fees':`${index+1}. ${index===0?(result.complete?'⭐ Top route':'⭐ Best returned route'):'Another route'}`,value:value.slice(0,1024)});
+   buttons.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(isBudget?'View lower-cost route':`View route ${index+1}`).setURL(p.url));
   }
-  embed.addFields({name:'HOW THESE ARE RANKED',value:'Final GG Rating, then final OVR, lower coin fees and fewer stages. Unrated paths follow rated paths. Fees exclude buying the card; token, reward and other unlocks still apply. Your club progress and already-used unlocks are not known.'});
+  embed.addFields({name:'Before you start',value:'Sorted by GG score, then rating and coin fees. Buying the card costs extra. Check any pass or token unlocks above.'});
   if(card.image?.startsWith('https://'))embed.setThumbnail(card.image);
   await i.editReply({embeds:[embed],components:buttons.length?[new ActionRowBuilder<ButtonBuilder>().addComponents(buttons)]:sourceButton});return;
  }
- if(['evolution','evolutions'].includes(i.commandName)){
+ if(i.commandName==='evo'&&i.options.getSubcommand()==='info'){
   const selectedPlatform=i.options.getString('market')??platform,evoId=i.options.getString('evolution',true);
   if(!['ps5','pc'].includes(selectedPlatform))throw new Error('Choose Console or PC.');
   const context=await fetchFutggContext(year),evo=context.evolutions.find(row=>row.id===evoId);
@@ -71,40 +74,26 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
   const resolved=await Promise.all(picks.map(async pick=>({pick,card:prices.get(pick.id)??await market.prices.card(pick.id)})));
   const visible=resolved.filter((row):row is typeof row&{card:Card}=>!!row.card&&!!row.card.name?.trim()&&!/^unknown(?: card| player)?$/i.test(row.card.name.trim())).slice(0,5);
   const lines=visible.map(({pick,card},idx)=>{
-   const fresh=prices.get(pick.id),cost=pick.chained?'Existing Evo path required':fresh?`${coins(fresh.value)} coins`:'No fresh market price';
-   return `**${idx+1}. ${card.name.slice(0,60)}** · ${card.rating??'—'} base OVR · ${card.position??'—'}\n${(card.rarity??'Player item').slice(0,45)} · **${cost}**`;
+   const fresh=prices.get(pick.id),cost=pick.chained?'Previous Evo needed':fresh?`${coins(fresh.value)} coins`:'Price unavailable';
+   return `**${idx+1}. ${evoText(card.name).slice(0,55)}** · ${card.rating??'—'} ${card.position??''}\n${evoText(card.rarity??'Player item').slice(0,45)} · **${cost}**`;
   });
-  const startBy=evo.startsBy??evo.closesAt,cost=evo.unlock|| (evo.coinsCost?`${coins(evo.coinsCost)} coins`:evo.pointsCost?`${evo.pointsCost} points`:'Free entry');
-  const finish=evo.closesAt!==startBy?` · Finish by <t:${Math.floor(Date.parse(evo.closesAt)/1000)}:R>`:'';
-  const embed=brand(selectedPlatform).setTitle('🧬 '+evo.name).setDescription(`**${cost}**\nStart by <t:${Math.floor(Date.parse(startBy)/1000)}:R>${finish}`);
-  const bullets=(values:string[],max=900)=>{let text='';for(const value of values){const line='• '+value;if(text.length+line.length+1>max)return text?text+'\nMore details on the Evo page.':line.slice(0,max-35)+'… See the Evo page for full details.';text+=(text?'\n':'')+line;}return text;};
-  const upgrades=evo.upgrades?.length?bullets(evo.upgrades,650):'Upgrade details were not supplied; check the Evo page.';
-  embed.addFields({name:'WHAT IT DOES',value:((evo.description&&evo.description!==evo.unlock?evo.description.slice(0,250)+'\n\n':'')+upgrades).slice(0,1024)});
-  embed.addFields({name:'WHAT YOU NEED',value:evo.requirements?.length?bullets(evo.requirements):'Entry restrictions were not supplied; check the exact card on the Evo page.'});
-  embed.addFields({name:'TO COMPLETE',value:evo.completion?.length?bullets(evo.completion):'No match challenges are listed in this feed. Check the Evo page for completion or training requirements.'});
-  embed.addFields({name:popular.length?'RECOMMENDED PICKS · FUT.GG TRENDING':'AVAILABLE PLAYER EXAMPLES',value:lines.join('\n\n')||'Player details for these picks are not yet available.'});
-  embed.addFields({name:'PICKING YOUR PLAYER',value:popular.length?'Up to five picks in FUT.GG popularity order. Prices and ratings refer to the starting card. Verify the exact version and any previous Evo path.':'FUT.GG supplied a short sample; a ranked recommendation list is unavailable.'});
+  const startBy=evo.startsBy??evo.closesAt,cost=evo.unlock?shortUnlock(evo.unlock):(evo.coinsCost?`${coins(evo.coinsCost)} coins${evo.pointsCost?' / '+coins(evo.pointsCost)+' FC Points':''}`:evo.pointsCost?`${evo.pointsCost} FC Points`:'Free entry');
+  const start=Math.floor(Date.parse(startBy)/1000),end=Math.floor(Date.parse(evo.closesAt)/1000);
+  const deadline=start===end?`Closes <t:${start}:R>`:`Entry closes <t:${start}:R> · Finish deadline <t:${end}:R>`;
+  const embed=brand(selectedPlatform).setTitle('🧬 '+evoText(evo.name)).setDescription(`**${cost}**\n${deadline}`);
+  const bullets=(values:string[],max=700)=>{let text='';for(const value of values){const line='• '+evoText(value);if(text.length+line.length+1>max)return (text||line.slice(0,max-30))+'\nFull details on FUT.GG.';text+=(text?'\n':'')+line;}return text;};
+  embed.addFields({name:'⚡ Upgrades',value:evo.upgrades?.length?bullets(evo.upgrades):evoText(evo.description??'See the upgrades on FUT.GG.').slice(0,700)});
+  embed.addFields({name:'✅ Your card needs',value:evo.requirements?.length?bullets(evo.requirements):'Check entry rules on FUT.GG.'});
+  if(evo.completion?.length)embed.addFields({name:'🎮 Tasks',value:bullets(evo.completion)});
+  embed.addFields({name:popular.length?'⭐ Popular picks':'👥 Example players',value:lines.join('\n\n')||'Player details are unavailable. See the player list on FUT.GG.'});
+  embed.addFields({name:'Before you start',value:(popular.length?'Picks follow FUT.GG popularity. ':'Only a sample is available. ')+'Prices are for the starting card. '+(!evo.completion?.length?'Open FUT.GG for completion tasks.':'Open a player’s route with /evo player.')});
   if(visible[0]?.card.image?.startsWith('https://'))embed.setThumbnail(visible[0].card.image);
-  const components=evo.url?[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('View Evo and player paths').setURL(evo.url))]:[];
+  const components=evo.url?[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('Full Evo details').setURL(evo.url))]:[];
   await i.editReply({embeds:[embed],components});return;
  }
  if(i.commandName==='gallery'){
   const setId=i.options.getString('set',true),context=await fetchFutggContext(year),tiers=context.gallery.filter(row=>row.setId===setId&&row.coinsPerToken!==null);
-  if(!tiers.length)throw new Error('That Gallery set is no longer available. Choose another from the command options.');
-  const rank=(grade:string)=>['D','C','B','A','S'].indexOf(grade.toUpperCase());
-  const best=[...tiers].sort((a,b)=>rank(b.grade)-rank(a.grade)||(a.cost??Infinity)-(b.cost??Infinity))[0];
-  const items=best.items??best.cardIds.map(id=>({id,price:null}));
-  if(items.length!==best.itemCount)throw new Error('FUT.GG returned an incomplete completion lineup. Please check the Gallery source.');
-  const cards=await Promise.all(items.map(async item=>({item,card:await market.prices.card(item.id)})));
-  const lineup=cards.sort((a,b)=>(a.item.price??Infinity)-(b.item.price??Infinity)).map(({item,card},idx)=>`${idx+1}. ${card?.name&&!/^unknown(?: card| player)?$/i.test(card.name)?card.name+' · '+(card.rating??'—')+' OVR · '+(card.rarity??'Player item'):'Card #'+item.id} — ${item.price!==null?coins(item.price)+' coins':'price unavailable'} [ID ${item.id}]`);
-  const total=items.every(item=>item.price!==null)?items.reduce((sum,item)=>sum+item.price!,0):null;
-  const intro=`**${best.grade} completion · ${coins(best.cost??0)} coins estimated**\n${best.tokens??'—'} tokens · ${coins(best.coinsPerToken!)} coins/token · ${items.length} cards\n\nFUT.GG's lowest-cost lineup for the highest available priced tier${best.grade==='S'?'':'; an S-tier solution was not supplied'}.`;
-  const all=lineup.join('\n'),preview=all.length>3300?lineup.slice(0,12).join('\n')+'\n\nFull lineup attached below.':all;
-  const embed=brand().setTitle('🏆 '+best.name+' · completion').setDescription(intro+'\n\n**BUY THESE CARDS**\n'+preview);
-  if(total!==null&&total!==best.cost)embed.addFields({name:'PRICE TOTAL',value:`Item prices sum to ${coins(total)} coins; FUT.GG reports ${coins(best.cost??0)} coins for the tier. Recheck the difference before buying.`});
-  embed.addFields({name:'PRICE CHECK',value:`FUT.GG lineup estimates, retrieved <t:${Math.floor(context.fetchedAt.getTime()/1000)}:R>. These are not live purchase quotes. No credit for cards you already own.`});
-  const text=`${best.name} — ${best.grade} completion\nFUT.GG estimated cost: ${coins(best.cost??0)} coins\nReward: ${best.tokens??'—'} tokens\nRetrieved: ${context.fetchedAt.toISOString()}\n\n${all}\n\n${total===null?'Some item prices are missing.':'Item subtotal: '+coins(total)+' coins.'}\nSource: FUT.GG Gallery hub. Verify card IDs and in-game requirements before buying.`;
-  await i.editReply({embeds:[embed],files:[new AttachmentBuilder(Buffer.from(text,'utf8'),{name:'gallery-completion.txt'})]});return;
+  await i.editReply(await startGallery(i.user.id,tiers,()=>brand(),id=>market.prices.galleryCard(id),i.options.getString('tier')));return;
  }
  if(i.commandName==='fodder'){
  const rating=i.options.getInteger('rating')??undefined,cards=await market.snapshot(),rows=fodderRows(cards,rating);
@@ -145,6 +134,6 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
  if(i.commandName==='compare'){const cards=await Promise.all(['first','second'].map(n=>resolve(i.options.getString(n,true))));const embeds=[];for(const c of cards){const p=await market.prices.latest(c.id,platform);const e=brand().setTitle(`⚖️ ${c.name} · ${c.rating??'—'} ${c.position??''}`).setDescription(`${c.rarity??'Player item'} · ${c.club??'—'}`).addFields({name:'LOWEST BIN',value:p?coins(p.value)+' coins':'Unavailable',inline:true},{name:'PRICE STATUS',value:p?`${isFresh(p.capturedAt,market.maxAge)?'🟢 Fresh':'🟠 Stale'} · <t:${Math.floor(p.capturedAt.getTime()/1000)}:R>`:'No observation',inline:true},{name:'AFTER TAX',value:p?coins(Math.floor(p.value*.95))+' coins':'—',inline:true});if(c.image?.startsWith('https://'))e.setThumbnail(c.image);embeds.push(e);}await i.editReply({embeds});return;}
  if(['pausealert','resumealert'].includes(i.commandName)){const id=i.options.getString('id',true);if(!/^\d+$/.test(id))throw new Error('Enter a numeric alert ID.');const pause=i.commandName==='pausealert';const r=await repo.pool.query('UPDATE futbot_alerts SET state=$1 WHERE user_id=$2 AND id=$3 AND state=$4 RETURNING id',[pause?'paused':'active',i.user.id,id,pause?'active':'paused']);await i.editReply(r.rowCount?`✅ Alert #${id} ${pause?'paused':'resumed'}.`:'No matching alert in the required state belongs to you.');return;}
  if(i.commandName==='dashboard'){const url=process.env.PUBLIC_URL;if(!url){await i.editReply('Your dashboard URL has not been configured yet. Set PUBLIC_URL on the bot service.');return;}await i.editReply({embeds:[brand().setTitle('🎛 YOUR FUTBOT CONTROL ROOM').setDescription('Your watchlist, personal targets and live market tools. Server managers also get branding, publishing and activity controls.')],components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setLabel('Open FutBot').setStyle(ButtonStyle.Link).setURL(new URL('/app/',url).href))]});return;}
- if(i.commandName==='help')await i.editReply({embeds:[brand().setTitle('📖 YOUR ULTIMATE TEAM TOOLKIT').setDescription('🪙 **Prices** · /price · /compare · /tax\n🧬 **Evolutions** · /evolution evolution:… · /evo player:…\n🏆 **Gallery** · /gallery set:…\n🧱 **Fodder** · /fodder rating:85\n🧴 **Consumables** · /consumables · /consumable\n📈 **Market** · /movers · /budget\n⭐ **Watchlist** · /watch · /watchlist · /unwatch\n🔔 **Targets** · /alert · /myalerts · /editalert · /removealert\n⏯ **Controls** · /pausealert · /resumealert · /testdm\n📈 **Trader auto posts** · /tradepost set · /tradepost list · /tradepost cancel *(Trader role only)*\n⭐ **Server lists** · /serverwatchlist · /serverpro\n🎛 **Dashboard** · /dashboard\n\nPrices are observed market data, not guaranteed listings or profit.') ]});
+ if(i.commandName==='help')await i.editReply({embeds:[brand().setTitle('📖 YOUR ULTIMATE TEAM TOOLKIT').setDescription('🪙 **Prices** · /price · /compare · /tax\n🧬 **Evolutions** · /evo info · /evo player\n🏆 **Gallery** · /gallery set:…\n🧱 **Fodder** · /fodder rating:85\n🧴 **Consumables** · /consumables · /consumable\n📈 **Market** · /movers · /budget\n⭐ **Watchlist** · /watch · /watchlist · /unwatch\n🔔 **Targets** · /alert · /myalerts · /editalert · /removealert\n⏯ **Controls** · /pausealert · /resumealert · /testdm\n📈 **Trader auto posts** · /tradepost set · /tradepost list · /tradepost cancel *(Trader role only)*\n⭐ **Server lists** · /serverwatchlist · /serverpro\n🎛 **Dashboard** · /dashboard\n\nPrices are observed market data, not guaranteed listings or profit.') ]});
 }
 

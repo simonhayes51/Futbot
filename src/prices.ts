@@ -1,4 +1,5 @@
 import pg from 'pg';
+import {fetchExactVersion,fetchHolographicCard,namedCard} from './futgg-cards.js';
 import {logFailure} from './logging.js';
 import type { Card, Price } from './domain.js';
 export type MiscItemType='manager'|'manager_league'|'chemistry_style';
@@ -46,6 +47,21 @@ export class PriceRepository {
       COALESCE(card_image_stored_url,card_image_url,player_image_url) AS image
       FROM public.futgg_players WHERE source_card_id=$1 AND game_year=$2`, [id,this.year]);
     return rows[0] || null;});
+  }
+  async galleryCard(id:string):Promise<Card|null>{
+    const known=await this.card(id);if(namedCard(known))return known;
+    if(!/^[1-9]\d*$/.test(id))return null;
+    return this.cached('gallery-card:'+id,300000,async()=>{
+      // EA's version offset is used only to find candidate players. The API
+      // response must independently confirm the exact requested item and year.
+      const {rows}=await this.pool.query(`SELECT DISTINCT source_player_id::text AS "playerId"
+        FROM public.futgg_players WHERE game_year=$1 AND source_player_id IS NOT NULL
+        AND mod(source_card_id::bigint,16777216)=mod($2::bigint,16777216) LIMIT 3`,[this.year,id]);
+      const candidates=[...new Set([...rows.map(row=>String(row.playerId)),String(BigInt(id)%16777216n)])].slice(0,3);
+      const versions=await Promise.all([fetchHolographicCard(this.year,id),...candidates.map(playerId=>fetchExactVersion(this.year,playerId,id))]);
+      for(const card of versions)if(namedCard(card))return card;
+      return known;
+    });
   }
   async evoIdentity(cardId:string):Promise<{playerId:string;url:string}|null>{
     if(!/^[1-9]\d*$/.test(cardId))throw new Error('Choose an exact player card.');

@@ -9,6 +9,7 @@ import {MarketService} from './market.js';
 import {startWeb} from './web.js';
 import type {Server} from 'node:http';
 import {extraCommands,handleTool} from './tools.js';
+import {handleGalleryButton} from './gallery-view.js';
 import {fetchFutggContext} from './futgg-context.js';
 import {guildSettings,defaultBrand,watch,type GuildSettings} from './settings.js';
 import { Client, MessageFlags, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, type Interaction } from 'discord.js';
@@ -211,9 +212,9 @@ async function handle(i:Interaction){
       await i.respond(choices);return;
     }
     const query=String(q).trim().toLocaleLowerCase();
-    if(['evolution','evolutions'].includes(i.commandName)){
+    if(i.commandName==='evo'&&i.options.getSubcommand()==='info'){
       const rows=(await fetchFutggContext(market.prices.year)).evolutions.filter(row=>!query||row.name.toLocaleLowerCase().includes(query)).slice(0,25);
-      await i.respond(rows.map(row=>({name:`${row.name} · ${row.playerCount??row.eligibleCardIds.length} FUT.GG results`.slice(0,100),value:row.id})));return;
+      await i.respond(rows.map(row=>({name:`${row.name}`.slice(0,100),value:row.id})));return;
     }
     if(i.commandName==='gallery'){
       const rows=(await fetchFutggContext(market.prices.year)).gallery.filter(row=>row.coinsPerToken!==null);
@@ -228,6 +229,7 @@ async function handle(i:Interaction){
   if(i.isStringSelectMenu()&&i.customId==='feedcard'){await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showPrice(await resolveCard(i.values[0])));return;}
   if(i.isStringSelectMenu()&&i.customId==='miscfeeditem'){await i.deferReply({flags:MessageFlags.Ephemeral});const [type,id,pricePlatform]=i.values[0].split(':');if(isMiscItemType(type))await i.editReply(await showMiscPrice(type,id,24,pricePlatform));else await i.editReply('That consumable selection is invalid.');return;}
   if(i.isButton()){
+    if(i.customId.startsWith('gallery:')){await handleGalleryButton(i);return;}
     if(i.customId.startsWith('miscalert:')){const [,type,id,direction,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))return;const modal=new ModalBuilder().setCustomId(`miscmodal:${type}:${id}:${direction}:${pricePlatform}`).setTitle('Set consumable price target');modal.addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(new TextInputBuilder().setCustomId('target').setLabel(direction==='below'?'Notify at or below (coins)':'Notify at or above (coins)').setStyle(TextInputStyle.Short).setRequired(true).setMaxLength(8)));await i.showModal(modal);return;}
     if(i.customId.startsWith('mischistory:')){const [,type,id,range,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))return;await i.deferReply({flags:MessageFlags.Ephemeral});await i.editReply(await showMiscPrice(type,id,Number(range)===168?168:24,pricePlatform));return;}
     if(i.customId.startsWith('miscwatch:')){const [,type,id,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))return;await i.deferReply({flags:MessageFlags.Ephemeral});const item=await prices.miscLatest(type,id,pricePlatform);await saveMiscWatch(i.user.id,type,id,pricePlatform);await i.editReply(`⭐ ${item?.display_name||miscCatalog.label(type,id)} saved to your ${pricePlatform.toUpperCase()} consumables watchlist. Open /dashboard to track it.`);return;}
@@ -249,7 +251,7 @@ async function handle(i:Interaction){
   if(i.isModalSubmit()&&i.customId.startsWith('miscmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,type,id,direction,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))throw new Error('Choose a valid consumable.');const target=Number(i.fields.getTextInputValue('target')),latest=await prices.miscLatest(type,id,pricePlatform);if(!Number.isInteger(target)||target<1||target>15000000)throw new Error('Choose a valid target price.');if(!latest||latest.price===null||latest.price<=0||!isFresh(latest.last_checked_at??latest.captured_at,Math.max(30,maxAge)))throw new Error('No fresh listed price is available for this item.');const itemLabel=latest.display_name||miscCatalog.label(type,id);await alerts.createMisc({userId:i.user.id,year,platform:pricePlatform,itemType:type,itemId:id,itemLabel,direction:direction as Direction,target,baseline:latest.price},(await benefits(alerts.pool,i.user.id)).alerts);await i.editReply(`🔔 Watching ${itemLabel} on ${pricePlatform.toUpperCase()} from ${coins(latest.price)} coins. You’ll get one DM when it reaches ${direction} ${coins(target)}.`);return;}
   if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,id,direction,pricePlatform]=i.customId.split(':');await i.editReply({embeds:[await createAlert(i,id,direction==='above'?'above':'below',Number(i.fields.getTextInputValue('target')),pricePlatform)]});return;}
   if(!i.isChatInputCommand())return;
-  await i.deferReply({flags:!['price','consumable','consumables','flip','fodder','movers','budget','compare','evolution','evolutions','evo','gallery'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
+  await i.deferReply({flags:!['price','consumable','consumables','flip','fodder','movers','budget','compare','evo','gallery'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
   if(extraCommands.some(c=>c.name===i.commandName)){await handleTool(i,market,alerts,brand,resolveCard,await benefits(alerts.pool,i.user.id));return;}
   if(i.commandName==='tradepost'){
    if(!i.guildId)throw new Error('Run this command inside your Discord server.');
@@ -298,7 +300,12 @@ client.on('error',e=>console.error('Discord client error:',e.message));
 client.once('clientReady',()=>{void startBot().catch(async e=>{console.error('FutBot startup failed:',e?.code===10004?'DISCORD_GUILD_ID is inaccessible. Check the server ID and invite this bot, or remove DISCORD_GUILD_ID for global commands.':e instanceof Error?e.message:'Unknown startup error');await stop(1);});});
 async function startBot(){
   const guildId=process.env.DISCORD_GUILD_ID;
-  if(guildId){const guild=await client.guilds.fetch(guildId);await guild.commands.set(commands.map(c=>c.toJSON()));}
+  if(guildId){
+    const guild=await client.guilds.fetch(guildId);await guild.commands.set(commands.map(c=>c.toJSON()));
+    // Retire aliases previously registered globally as well as in this guild.
+    const globalCommands=await client.application!.commands.fetch();
+    for(const command of globalCommands.values())if(['evolution','evolutions'].includes(command.name))await command.delete();
+  }
   else await client.application!.commands.set(commands.map(c=>c.toJSON()));
   if(process.env.WEB_ENABLED==='true')web=startWeb(prices,alerts,market);
   void miscCatalog.refresh().then(count=>console.log(`Misc item catalogue refreshed · ${count} managers`)).catch(e=>logFailure('Misc item catalogue refresh failed; saved names remain available',e));
