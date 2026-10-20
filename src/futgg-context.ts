@@ -4,6 +4,7 @@ export type EvolutionWatch = {
   pointsCost: number | null; eligibleCardIds: string[]; trendingCardIds: string[];
   playerCount?: number | null; unlock?: string; url?: string; startsBy?: string;
   requirements?: string[]; upgrades?: string[];
+  description?: string; completion?: string[];
   popularPicks?: {id: string; path: string; chained: boolean}[];
 };
 export type GalleryValue = {
@@ -46,6 +47,8 @@ export function normaliseEvolutions(payload: unknown, now = Date.now()): Evoluti
       unlock:typeof row.customUnlockable==='string'?row.customUnlockable:undefined,
       startsBy:typeof row.endTime==='string'&&Number.isFinite(Date.parse(row.endTime))?row.endTime:undefined,
       url:typeof row.url==='string'&&/^\/evolutions\/[a-z0-9-]+\/$/.test(row.url)?'https://www.fut.gg'+row.url:undefined,
+      description:typeof row.description==='string'?row.description.slice(0,400):undefined,
+      completion:asList(row.levels).flatMap((level,index)=>asList(asObject(level).challenges).flatMap(challenge=>typeof challenge==='string'&&challenge.trim()?[`Level ${index+1}: ${challenge.trim()}`]:[])),
       requirements:readable(row.requirementsText),upgrades:readable(row.totalUpgradesText)}];
   }).sort((a, b) => Date.parse(a.closesAt) - Date.parse(b.closesAt));
 }

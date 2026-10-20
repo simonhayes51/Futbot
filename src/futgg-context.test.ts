@@ -47,8 +47,8 @@ test('live collector follows the manifest version and gets both public feeds', a
 });
 
 test('Evo metadata distinguishes the full count from samples and retains branching or chained popular paths',()=>{
- const [evo]=normaliseEvolutions([{id:2532,name:'Frontline Flair',endTime:'2099-01-01T00:00:00Z',endSubmissionTime:'2099-02-01T00:00:00Z',numberOfPlayers:4291,eligiblePlayerItemIds:[1,2,3],trendingPlayersIds:['99_2532:1','88_42_2532'],customUnlockable:'Unlocked via the Token Store for 100 tokens',url:'/evolutions/2532-frontline-flair/',requirementsText:[{label:'Overall',value:'Max. 83'}],totalUpgradesText:[{label:'Overall',value:'+1',maxValue:'(^84)'}]}]);
- assert.equal(evo.playerCount,4291);assert.equal(evo.eligibleCardIds.length,3);
+ const [evo]=normaliseEvolutions([{id:2532,name:'Frontline Flair',endTime:'2099-01-01T00:00:00Z',endSubmissionTime:'2099-02-01T00:00:00Z',numberOfPlayers:4291,eligiblePlayerItemIds:[1,2,3],trendingPlayersIds:['99_2532:1','88_42_2532'],description:'Boost your attackers.',levels:[{challenges:['Play 1 match.']},{challenges:['Win 2 matches.']}],customUnlockable:'Unlocked via the Token Store for 100 tokens',url:'/evolutions/2532-frontline-flair/',requirementsText:[{label:'Overall',value:'Max. 83'}],totalUpgradesText:[{label:'Overall',value:'+1',maxValue:'(^84)'}]}]);
+ assert.equal(evo.description,'Boost your attackers.');assert.deepEqual(evo.completion,['Level 1: Play 1 match.','Level 2: Win 2 matches.']);assert.equal(evo.playerCount,4291);assert.equal(evo.eligibleCardIds.length,3);
  assert.deepEqual(evo.popularPicks?.map(p=>[p.id,p.chained]),[['99',false],['88',true]]);
  assert.match(evo.unlock!,/100 tokens/);assert.deepEqual(evo.requirements,['Overall: Max. 83']);
  assert.deepEqual(evo.upgrades,['Overall: +1 (^84)']);

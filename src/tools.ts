@@ -40,13 +40,18 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
   const visible=resolved.filter((row):row is typeof row&{card:Card}=>!!row.card&&!!row.card.name?.trim()&&!/^unknown(?: card| player)?$/i.test(row.card.name.trim())).slice(0,5);
   const lines=visible.map(({pick,card},idx)=>{
    const fresh=prices.get(pick.id),cost=pick.chained?'Existing Evo path required':fresh?`${coins(fresh.value)} coins`:'No fresh market price';
-   return `**${idx+1}. ${card.name}** · ${card.rating??'—'} base OVR · ${card.position??'—'}\n${card.rarity??'Player item'} · **${cost}**`;
+   return `**${idx+1}. ${card.name.slice(0,60)}** · ${card.rating??'—'} base OVR · ${card.position??'—'}\n${(card.rarity??'Player item').slice(0,45)} · **${cost}**`;
   });
   const startBy=evo.startsBy??evo.closesAt,cost=evo.unlock|| (evo.coinsCost?`${coins(evo.coinsCost)} coins`:evo.pointsCost?`${evo.pointsCost} points`:'Free entry');
-  const embed=brand(selectedPlatform).setTitle('🧬 '+evo.name).setDescription(`**${cost}**\nStart by <t:${Math.floor(Date.parse(startBy)/1000)}:R>\n\n${popular.length?'**Top FUT.GG trending picks**':'**Available card examples**'}\n\n${lines.join('\n\n')||'Player details for these picks are not yet available.'}`);
-  if(evo.upgrades?.length)embed.addFields({name:'WHAT YOU GET',value:evo.upgrades.join(' · ').slice(0,1024)});
-  if(evo.requirements?.length)embed.addFields({name:'ENTRY REQUIREMENTS',value:evo.requirements.join(' · ').slice(0,1024)});
-  embed.addFields({name:'ABOUT THESE PICKS',value:popular.length?'Ordered by FUT.GG popularity, not cheapest price. Ratings shown are the starting card. Check the exact card and any prior Evo path before buying.':'FUT.GG supplied a short sample, not a full ranked shortlist.'});
+  const finish=evo.closesAt!==startBy?` · Finish by <t:${Math.floor(Date.parse(evo.closesAt)/1000)}:R>`:'';
+  const embed=brand(selectedPlatform).setTitle('🧬 '+evo.name).setDescription(`**${cost}**\nStart by <t:${Math.floor(Date.parse(startBy)/1000)}:R>${finish}`);
+  const bullets=(values:string[],max=900)=>{let text='';for(const value of values){const line='• '+value;if(text.length+line.length+1>max)return text?text+'\nMore details on the Evo page.':line.slice(0,max-35)+'… See the Evo page for full details.';text+=(text?'\n':'')+line;}return text;};
+  const upgrades=evo.upgrades?.length?bullets(evo.upgrades,650):'Upgrade details were not supplied; check the Evo page.';
+  embed.addFields({name:'WHAT IT DOES',value:((evo.description&&evo.description!==evo.unlock?evo.description.slice(0,250)+'\n\n':'')+upgrades).slice(0,1024)});
+  embed.addFields({name:'WHAT YOU NEED',value:evo.requirements?.length?bullets(evo.requirements):'Entry restrictions were not supplied; check the exact card on the Evo page.'});
+  embed.addFields({name:'TO COMPLETE',value:evo.completion?.length?bullets(evo.completion):'No match challenges are listed in this feed. Check the Evo page for completion or training requirements.'});
+  embed.addFields({name:popular.length?'RECOMMENDED PICKS · FUT.GG TRENDING':'AVAILABLE PLAYER EXAMPLES',value:lines.join('\n\n')||'Player details for these picks are not yet available.'});
+  embed.addFields({name:'PICKING YOUR PLAYER',value:popular.length?'Up to five picks in FUT.GG popularity order. Prices and ratings refer to the starting card. Verify the exact version and any previous Evo path.':'FUT.GG supplied a short sample; a ranked recommendation list is unavailable.'});
   if(visible[0]?.card.image?.startsWith('https://'))embed.setThumbnail(visible[0].card.image);
   const components=evo.url?[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('View Evo and player paths').setURL(evo.url))]:[];
   await i.editReply({embeds:[embed],components});return;
