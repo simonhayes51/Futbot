@@ -11,6 +11,7 @@ import type {Server} from 'node:http';
 import {extraCommands,handleTool} from './tools.js';
 import {handleGalleryButton} from './gallery-view.js';
 import {fetchFutggContext} from './futgg-context.js';
+import {fetchSbcList} from './sbc.js';
 import {guildSettings,defaultBrand,watch,type GuildSettings} from './settings.js';
 import { Client, MessageFlags, GatewayIntentBits, SlashCommandBuilder, EmbedBuilder, AttachmentBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, ChannelType, type Interaction } from 'discord.js';
 import { PriceRepository,isMiscItemType,type MiscItemType } from './prices.js';
@@ -212,6 +213,10 @@ async function handle(i:Interaction){
       await i.respond(choices);return;
     }
     const query=String(q).trim().toLocaleLowerCase();
+    if(i.commandName==='sbc'){
+      const rows=(await fetchSbcList(market.prices.year)).filter(row=>!query||row.name.toLocaleLowerCase().includes(query)||row.description.toLocaleLowerCase().includes(query)).slice(0,25);
+      await i.respond(rows.map(row=>({name:row.name.slice(0,100),value:row.url})));return;
+    }
     if(i.commandName==='evo'&&i.options.getSubcommand()==='info'){
       const rows=(await fetchFutggContext(market.prices.year)).evolutions.filter(row=>!query||row.name.toLocaleLowerCase().includes(query)).slice(0,25);
       await i.respond(rows.map(row=>({name:`${row.name}`.slice(0,100),value:row.id})));return;
@@ -251,7 +256,7 @@ async function handle(i:Interaction){
   if(i.isModalSubmit()&&i.customId.startsWith('miscmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,type,id,direction,pricePlatform]=i.customId.split(':');if(!isMiscItemType(type))throw new Error('Choose a valid consumable.');const target=Number(i.fields.getTextInputValue('target')),latest=await prices.miscLatest(type,id,pricePlatform);if(!Number.isInteger(target)||target<1||target>15000000)throw new Error('Choose a valid target price.');if(!latest||latest.price===null||latest.price<=0||!isFresh(latest.last_checked_at??latest.captured_at,Math.max(30,maxAge)))throw new Error('No fresh listed price is available for this item.');const itemLabel=latest.display_name||miscCatalog.label(type,id);await alerts.createMisc({userId:i.user.id,year,platform:pricePlatform,itemType:type,itemId:id,itemLabel,direction:direction as Direction,target,baseline:latest.price},(await benefits(alerts.pool,i.user.id)).alerts);await i.editReply(`🔔 Watching ${itemLabel} on ${pricePlatform.toUpperCase()} from ${coins(latest.price)} coins. You’ll get one DM when it reaches ${direction} ${coins(target)}.`);return;}
   if(i.isModalSubmit()&&i.customId.startsWith('alertmodal:')){await i.deferReply({flags:MessageFlags.Ephemeral});const [,id,direction,pricePlatform]=i.customId.split(':');await i.editReply({embeds:[await createAlert(i,id,direction==='above'?'above':'below',Number(i.fields.getTextInputValue('target')),pricePlatform)]});return;}
   if(!i.isChatInputCommand())return;
-  await i.deferReply({flags:!['price','consumable','consumables','flip','fodder','movers','budget','compare','evo','gallery'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
+  await i.deferReply({flags:!['price','consumable','consumables','flip','fodder','movers','budget','compare','evo','gallery','sbc'].includes(i.commandName)?MessageFlags.Ephemeral:undefined});
   if(extraCommands.some(c=>c.name===i.commandName)){await handleTool(i,market,alerts,brand,resolveCard,await benefits(alerts.pool,i.user.id));return;}
   if(i.commandName==='tradepost'){
    if(!i.guildId)throw new Error('Run this command inside your Discord server.');

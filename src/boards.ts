@@ -35,7 +35,7 @@ export async function tradeReceipt(buy:number,sell:number,quantity:number){
 
 export function rankConsumables(items:MiscMarketItem[],direction:'risers'|'fallers'|'all'='all',limit=6){
  const rows=items.filter(item=>Number(item.price)>0&&Number(item.baseline_price)>0).map(item=>({...item,change_pct:(Number(item.price)-Number(item.baseline_price!))/Number(item.baseline_price!)*100}));
- const selected=direction==='risers'?rows.filter(item=>item.change_pct>0).sort((a,b)=>b.change_pct-a.change_pct):direction==='fallers'?rows.filter(item=>item.change_pct<0).sort((a,b)=>a.change_pct-b.change_pct):rows.sort((a,b)=>Math.abs(b.change_pct)-Math.abs(a.change_pct));
+ const selected=direction==='risers'?rows.filter(item=>item.change_pct>0).sort((a,b)=>b.change_pct-a.change_pct):direction==='fallers'?rows.filter(item=>item.change_pct<0).sort((a,b)=>a.change_pct-b.change_pct):rows.filter(item=>item.change_pct!==0).sort((a,b)=>Number(a.change_pct<0)-Number(b.change_pct<0)||Math.abs(b.change_pct)-Math.abs(a.change_pct));
  return selected.slice(0,Math.max(1,Math.min(12,limit)));
 }
 export async function consumablesBoard(items:MiscMarketItem[],platform:string,year=27,brand?:GuildSettings){

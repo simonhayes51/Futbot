@@ -1,11 +1,12 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {extraCommands,handleTool} from './tools.js';import {EmbedBuilder} from 'discord.js';
 test('one Evo command offers info and player; Gallery offers an optional tier',()=>{
- const list=extraCommands.map(c=>c.toJSON());assert.equal(list.length,14);assert.equal(new Set(list.map(c=>c.name)).size,14);
+ const list=extraCommands.map(c=>c.toJSON());assert.equal(list.length,15);assert.equal(new Set(list.map(c=>c.name)).size,15);
  assert(!list.some(c=>['evolution','evolutions'].includes(c.name)));
  const evo=list.find(c=>c.name==='evo')!;assert.deepEqual(evo.options?.map(o=>o.name),['info','player']);
  assert.equal((evo.options?.[0] as any).options[0].autocomplete,true);
  const gallery=list.find(c=>c.name==='gallery')!;assert.equal((gallery.options?.[0] as any).autocomplete,true);assert.equal(gallery.options?.[1].name,'tier');
+ const sbc=list.find(c=>c.name==='sbc')!;assert.equal((sbc.options?.[0] as any).autocomplete,true);assert.equal(sbc.options?.[1].name,'market');
 });
 test('pause control scopes its update to the caller and current alert state',async()=>{let params:any;let reply:any;const interaction:any={commandName:'pausealert',user:{id:'owner'},options:{getString:()=> '123'},editReply:async(v:any)=>{reply=v;}};const repo:any={pool:{query:async(_sql:string,p:any)=>{params=p;return {rowCount:1};}}};await handleTool(interaction,{prices:{year:27},platform:'ps5'} as any,repo,()=>new EmbedBuilder(),async()=>{throw Error('unused');});assert.deepEqual(params,['paused','owner','123','active']);assert.match(reply,/paused/);});
 
