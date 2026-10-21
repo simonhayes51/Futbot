@@ -1,7 +1,8 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {extraCommands,handleTool} from './tools.js';import {EmbedBuilder} from 'discord.js';
 test('one Evo command offers info and player; Gallery offers an optional tier',()=>{
- const list=extraCommands.map(c=>c.toJSON());assert.equal(list.length,15);assert.equal(new Set(list.map(c=>c.name)).size,15);
+ const list=extraCommands.map(c=>c.toJSON());assert.equal(list.length,16);assert.equal(new Set(list.map(c=>c.name)).size,16);
+ const tactics=list.find(c=>c.name==='tactics')!;assert.equal((tactics.options?.[0] as any).autocomplete,true);
  assert(!list.some(c=>['evolution','evolutions'].includes(c.name)));
  const evo=list.find(c=>c.name==='evo')!;assert.deepEqual(evo.options?.map(o=>o.name),['info','player']);
  assert.equal((evo.options?.[0] as any).options[0].autocomplete,true);
