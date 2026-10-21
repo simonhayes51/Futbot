@@ -5,15 +5,16 @@ import {fodderBoard,consumablesBoard,rankConsumables} from './boards.js';
 import {watch,watchedMarkets,guildSettings} from './settings.js';
 import type {AlertRepository} from './alerts.js';
 import type {Card} from './domain.js';
-import {fetchExactVersion,namedCard} from './futgg-cards.js';
 import {coins,isFresh} from './domain.js';
 import {fetchFutggContext} from './futgg-context.js';
 import {fetchPlayerPaths,pathUrl} from './evo-paths.js';
 import {startGallery} from './gallery-view.js';
 import {evoText,shortUnlock} from './evo-copy.js';
 import {fetchSbcDetail,fetchSbcList,fetchSbcPlayers,fetchSbcSolutionNames} from './sbc.js';
+import {fetchTacticDetail,fetchTacticList} from './tactics.js';
 const player=(o:any)=>o.setName('player').setDescription('Choose an exact card').setRequired(true).setAutocomplete(true);
 export const extraCommands=[
+ new SlashCommandBuilder().setName('tactics').setDescription('🎮 Pick a popular formation and see its setup and share code').addStringOption(o=>o.setName('formation').setDescription('Choose a formation ranked by FUT.GG players').setRequired(true).setAutocomplete(true)),
  new SlashCommandBuilder().setName('fodder').setDescription('🧱 Cheapest fresh cards by rating, with a visual price ladder'),
  new SlashCommandBuilder().setName('evo').setDescription('🧬 Find an Evo or plan a player’s upgrades')
  .addSubcommand(s=>s.setName('info').setDescription('See Evo upgrades, requirements and popular players').addStringOption(o=>o.setName('evolution').setDescription('Choose an open Evo').setRequired(true).setAutocomplete(true)).addStringOption(o=>o.setName('market').setDescription('Card price market').addChoices({name:'Console',value:'ps5'},{name:'PC',value:'pc'})))
@@ -35,6 +36,13 @@ export const extraCommands=[
 export function cardLines(cards:MarketCard[]){return cards.slice(0,10).map((c,i)=>`**${String(i+1).padStart(2,'0')} · ${c.name.replace(/[*_`~|\\]/g,'')}** · ${c.rating??'—'} ${c.position??''}\n🪙 **${coins(c.value)}**${c.change===null?'':` · ${c.change>=0?'📈 +':'📉 '}${c.change.toFixed(1)}%`}`).join('\n\n')||'No fresh prices match. Try a different filter or check the collector.';}
 export async function handleTool(i:ChatInputCommandInteraction,market:MarketService,repo:AlertRepository,brand:(pricePlatform?:string)=>EmbedBuilder,resolve:(id:string)=>Promise<Card>,limits={watch:20}){
  const year=market.prices.year,platform=market.platform;
+ if(i.commandName==='tactics'){
+  const slug=i.options.getString('formation',true),detail=await fetchTacticDetail(year,slug),t=detail.choice,embed=brand().setTitle(`🎮 #${t.rank} · ${t.name}`).setURL(detail.url).setDescription(`Used by **${t.popularity.toFixed(1)}%** of FUT.GG community squads · **${t.proUsage.toFixed(1)}%** of pros\n\n**Build-up:** ${t.buildUp} · **Defence:** ${t.defense} · **Line height:** ${t.lineHeight}\n**Share code:** \`${t.shareCode}\``);
+  const groups=[['🛡️ Back line',detail.roles.filter(r=>['GK','RB','RCB','CB','LCB','LB'].includes(r.position))],['⚙️ Midfield',detail.roles.filter(r=>['CDM','RCDM','LCDM','RCM','CM','LCM','CAM','RCAM','LCAM'].includes(r.position))],['⚡ Attack',detail.roles.filter(r=>['RW','RF','ST','LS','RS','LF','LW'].includes(r.position))]];
+  for(const [name,roles] of groups)if(roles.length)embed.addFields({name:name as string,value:(roles as typeof detail.roles).map(r=>`**${r.position}** ${r.role} · ${r.focus}${r.share?` (${r.share}%)`:''}`).join('\n').slice(0,1024)});
+  embed.addFields({name:'How to use it',value:'Open your squad’s Tactics menu in FC 27, choose to import a tactic, then enter the share code above. Set the listed player roles and focuses to match the popular setup. Adjust anything that does not suit your team.'},{name:'What the numbers mean',value:'The community and pro percentages show how often FUT.GG squads use this formation. The role percentages show the most common role focus for that position.'});
+  await i.editReply({embeds:[embed],components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel('View tactic on FUT.GG').setURL(detail.url))]});return;
+ }
  if(i.commandName==='sbc'){
   const url=i.options.getString('challenge',true),selectedPlatform=i.options.getString('market')??platform;
   if(!['ps5','pc'].includes(selectedPlatform))throw new Error('Choose Console or PC.');
@@ -51,23 +59,7 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
     lines.push(full?players.map(p=>`• **${p.name}** · ${p.overall} ${p.rarity} · ${coins(p.price)}`).join('\n'):best.groups.map(g=>`${g.count}× ${g.overall} rated · ${coins(g.unitPrice)} each`).join('\n')+'\nPlayer names are not available from the feed right now.');
     const target=c.scoreRequirement??best.score;solverLinks.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`Solve ${index+1} on FUT.GG`).setURL(`https://www.fut.gg/sbc/streamlined-solver/?target=${target}&platform=${selectedPlatform}`));
    }
-   else if(c.solutionUrl){
-    let names:string[]=[];
-    try{
-     names=await fetchSbcSolutionNames(c.solutionUrl,fetch,async id=>{
-      try{const indexed=await market.prices.playerName(id);if(indexed)return indexed;}catch{/* Try FUT.GG's exact item catalogue below. */}
-      const playerId=String(BigInt(id)%16777216n);
-      const card=await fetchExactVersion(year,playerId,id).catch(()=>null);
-      return namedCard(card)?card.name:null;
-     });
-    }catch{/* Keep the direct solution link available if its page is temporarily unavailable. */}
-    const identified=names.filter(name=>!name.startsWith('Unknown card (')).length;
-    const complete=names.length===11&&identified===11;
-    const label=complete?'Best solution · 11 players':`FUT.GG squad · ${identified}/11 players identified`;
-    const note=complete?'':'\nSome card names are missing or could not be matched; check the squad before submitting.';
-    lines.push(names.length?`**${label}**\n${names.map(name=>'• '+name).join('\n')}${note}`:'**FUT.GG squad solution** · Open the linked FUT.GG squad for the full card list.');
-    solverLinks.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`Solution ${index+1}`).setURL(c.solutionUrl));
-   }
+   else if(c.solutionUrl){let names:string[]=[];try{names=await fetchSbcSolutionNames(c.solutionUrl,fetch,id=>market.prices.playerName(id));}catch{/* Keep the direct solution link available if its page is temporarily unavailable. */}lines.push(names.length?`**Best solution · ${names.length} cards**\n${names.map(name=>'• '+name).join('\n')}`:'**Best squad solution** · Open the linked FUT.GG squad for the full card list.');solverLinks.push(new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel(`Solution ${index+1}`).setURL(c.solutionUrl));}
    else if(c.streamlined)lines.push('FUT.GG has not published a solution for this challenge yet.');
    const value=lines.filter(Boolean).join('\n').slice(0,1000)||'Challenge details are not available.';
    embed.addFields({name:`${index+1}. ${c.name}`.slice(0,256),value});
@@ -179,6 +171,6 @@ export async function handleTool(i:ChatInputCommandInteraction,market:MarketServ
  if(i.commandName==='compare'){const cards=await Promise.all(['first','second'].map(n=>resolve(i.options.getString(n,true))));const embeds=[];for(const c of cards){const p=await market.prices.latest(c.id,platform);const e=brand().setTitle(`⚖️ ${c.name} · ${c.rating??'—'} ${c.position??''}`).setDescription(`${c.rarity??'Player item'} · ${c.club??'—'}`).addFields({name:'LOWEST BIN',value:p?coins(p.value)+' coins':'Unavailable',inline:true},{name:'PRICE STATUS',value:p?`${isFresh(p.capturedAt,market.maxAge)?'🟢 Fresh':'🟠 Stale'} · <t:${Math.floor(p.capturedAt.getTime()/1000)}:R>`:'No observation',inline:true},{name:'AFTER TAX',value:p?coins(Math.floor(p.value*.95))+' coins':'—',inline:true});if(c.image?.startsWith('https://'))e.setThumbnail(c.image);embeds.push(e);}await i.editReply({embeds});return;}
  if(['pausealert','resumealert'].includes(i.commandName)){const id=i.options.getString('id',true);if(!/^\d+$/.test(id))throw new Error('Enter a numeric alert ID.');const pause=i.commandName==='pausealert';const r=await repo.pool.query('UPDATE futbot_alerts SET state=$1 WHERE user_id=$2 AND id=$3 AND state=$4 RETURNING id',[pause?'paused':'active',i.user.id,id,pause?'active':'paused']);await i.editReply(r.rowCount?`✅ Alert #${id} ${pause?'paused':'resumed'}.`:'No matching alert in the required state belongs to you.');return;}
  if(i.commandName==='dashboard'){const url=process.env.PUBLIC_URL;if(!url){await i.editReply('Your dashboard URL has not been configured yet. Set PUBLIC_URL on the bot service.');return;}await i.editReply({embeds:[brand().setTitle('🎛 YOUR FUTBOT CONTROL ROOM').setDescription('Your watchlist, personal targets and live market tools. Server managers also get branding, publishing and activity controls.')],components:[new ActionRowBuilder<ButtonBuilder>().addComponents(new ButtonBuilder().setLabel('Open FutBot').setStyle(ButtonStyle.Link).setURL(new URL('/app/',url).href))]});return;}
- if(i.commandName==='help')await i.editReply({embeds:[brand().setTitle('📖 YOUR ULTIMATE TEAM TOOLKIT').setDescription('🪙 **Prices** · /price · /compare · /tax\n🧬 **Evolutions** · /evo info · /evo player\n🧩 **SBCs** · /sbc challenge:…\n🏆 **Gallery** · /gallery set:…\n🧱 **Fodder** · /fodder rating:85\n🧴 **Consumables** · /consumables · /consumable\n📈 **Market** · /movers · /budget\n⭐ **Watchlist** · /watch · /watchlist · /unwatch\n🔔 **Targets** · /alert · /myalerts · /editalert · /removealert\n⏯ **Controls** · /pausealert · /resumealert · /testdm\n📈 **Trader auto posts** · /tradepost set · /tradepost list · /tradepost cancel *(Trader role only)*\n⭐ **Server lists** · /serverwatchlist · /serverpro\n🎛 **Dashboard** · /dashboard\n\nPrices are observed market data, not guaranteed listings or profit.') ]});
+ if(i.commandName==='help')await i.editReply({embeds:[brand().setTitle('📖 YOUR ULTIMATE TEAM TOOLKIT').setDescription('🪙 **Prices** · /price · /compare · /tax\n🎮 **Tactics** · /tactics formation:…\n🧬 **Evolutions** · /evo info · /evo player\n🧩 **SBCs** · /sbc challenge:…\n🏆 **Gallery** · /gallery set:…\n🧱 **Fodder** · /fodder rating:85\n🧴 **Consumables** · /consumables · /consumable\n📈 **Market** · /movers · /budget\n⭐ **Watchlist** · /watch · /watchlist · /unwatch\n🔔 **Targets** · /alert · /myalerts · /editalert · /removealert\n⏯ **Controls** · /pausealert · /resumealert · /testdm\n📈 **Trader auto posts** · /tradepost set · /tradepost list · /tradepost cancel *(Trader role only)*\n⭐ **Server lists** · /serverwatchlist · /serverpro\n🎛 **Dashboard** · /dashboard\n\nPrices are observed market data, not guaranteed listings or profit.') ]});
 }
 
