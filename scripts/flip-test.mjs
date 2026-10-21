@@ -6,6 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;
+const MAX_BIN = 15_000_000;
 export const eligible = card => card.price > 20_000 || card.rating > 85;
 const median = values => quantile(values, 0.5);
 function quantile(values, fraction) {
@@ -16,7 +17,7 @@ function quantile(values, fraction) {
 }
 const change = (value, baseline) => value / baseline - 1;
 export function emptyState(year = 27, platform = 'ps5') {
-  return {version: 1, year, platform, selectedAt: 0, ids: [], cards: {}, pauseUntil: 0, calls: []};
+  return {version: 1, historyPolicy: 1, year, platform, selectedAt: 0, ids: [], cards: {}, pauseUntil: 0, calls: []};
 }
 
 // Hourly medians for history; three separate fresh observations for confirmation.
@@ -39,7 +40,7 @@ export function ingest(state, rows, now) {
       if (!point || point.at !== bucket) card.history.push(point = {at: bucket, values: []});
       // At most one sample per 15-minute source-time slot. Bound state size.
       const slot = Math.floor(at / 900_000) % 4;
-      point.values[slot] = price;
+      if (price < MAX_BIN) point.values[slot] = price;
       card.history = card.history.filter(p => p.at >= now - 7 * DAY);
     }
     card.at = at; card.price = price;
@@ -82,7 +83,7 @@ export function seedHistory(state, ids, rows, now) {
       const bucket = Math.floor(p.at / HOUR) * HOUR;
       if (bucket !== Math.floor(now / HOUR) * HOUR) continue;
       const point = hours.get(bucket) ?? {at: bucket, values: []};
-      point.values[Math.floor(p.at / 900_000) % 4] = p.price;
+      if (p.price < MAX_BIN) point.values[Math.floor(p.at / 900_000) % 4] = p.price;
       hours.set(bucket, point);
     }
     card.history = [...hours.values()].filter(p => p.at >= now - 7 * DAY).sort((a, b) => a.at - b.at);
@@ -104,7 +105,7 @@ export function historySQL(platform, hours = 168) {
       SELECT date_trunc('hour',captured_at) AS at,
         percentile_cont(0.5) WITHIN GROUP(ORDER BY lowest_bin) AS price
       FROM ${table} WHERE source_card_id=p.source_card_id AND game_year=$1 AND platform=$2
-        AND lowest_bin>0 AND captured_at>=date_trunc('hour',$4::timestamptz)-interval '${hours} hours'
+        AND lowest_bin>0 AND lowest_bin<${MAX_BIN} AND captured_at>=date_trunc('hour',$4::timestamptz)-interval '${hours} hours'
         AND captured_at<date_trunc('hour',$4::timestamptz)
       GROUP BY 1
     ) h ON true WHERE p.game_year=$1 AND p.source_card_id::text=ANY($3::text[])
@@ -115,7 +116,7 @@ export function historySQL(platform, hours = 168) {
         SELECT DISTINCT ON (date_bin(interval '15 minutes',captured_at,timestamptz '2000-01-01'))
           captured_at,lowest_bin,id
         FROM ${table} WHERE source_card_id=p.source_card_id AND game_year=$1 AND platform=$2
-          AND lowest_bin>0 AND captured_at >= $4::timestamptz-interval '1 hour'
+          AND lowest_bin>0 AND lowest_bin<${MAX_BIN} AND captured_at >= $4::timestamptz-interval '1 hour'
           AND captured_at <= $4::timestamptz
         ORDER BY date_bin(interval '15 minutes',captured_at,timestamptz '2000-01-01') DESC,captured_at DESC,id DESC
       ) slots ORDER BY captured_at DESC,id DESC LIMIT 3
@@ -139,6 +140,7 @@ export function marketCheck(cards, now) {
 export function evaluate(card, now) {
   if (!eligible(card)) return {reason: 'outside_price_or_rating_filter'};
   if (now - card.at > 30 * 60_000) return {reason: 'stale'};
+  if (card.price >= MAX_BIN) return {reason: 'market_ceiling'};
   if (now - card.lastAlert < DAY) return {reason: 'cooldown'};
   const recent = card.recent;
   if (recent.length < 3 || recent[2].at - recent[0].at < 20 * 60_000 ||
@@ -298,6 +300,13 @@ async function main() {
     catch (error) {if (error.code !== 'ENOENT') throw error; state = emptyState(year, platform);}
     if (state.version !== 1 || state.year !== year || state.platform !== platform)
       throw new Error('State does not match scanner version/year/platform');
+    if (state.historyPolicy !== 1) {
+      for (const card of Object.values(state.cards)) {
+        card.history = []; card.recent = []; card.historySeededAt = 0;
+      }
+      state.historyPolicy = 1;
+      state.lastScanAt = 0;
+    }
     if (!process.env.PRICE_DATABASE_URL) throw new Error('PRICE_DATABASE_URL is required');
     const {default: pg} = await import('pg');
     pool = new pg.Pool({connectionString: process.env.PRICE_DATABASE_URL, max: 1,

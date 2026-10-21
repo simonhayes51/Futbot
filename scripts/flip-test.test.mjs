@@ -14,6 +14,13 @@ test('strict price OR rating filter, including boundary values', () => {
   assert.equal(eligible({price: 20_001, rating: 80}), true);
   assert.equal(eligible({price: 1000, rating: 86}), true);
 });
+test('market-ceiling readings are excluded from history and cannot produce a buy signal', () => {
+  const c = card(); c.price = 15_000_000;
+  assert.equal(evaluate(c, now).reason, 'market_ceiling');
+  const state = emptyState();
+  ingest(state, [{id: 'cap', name: 'Capped', rating: 90, price: 15_000_000, at: now - 60_000}], now);
+  assert.deepEqual(state.cards.cap.history[0].values, []);
+});
 test('repeated dips qualify, isolated peaks cannot raise target', () => {
   const c = card(), baseline = evaluate(c, now);
   assert.equal(baseline.reason, 'candidate');
@@ -84,6 +91,7 @@ test('query only permits supported tables and parameterises filters', () => {
   assert.throws(() => historySQL('ps5', '4;DROP TABLE'));
   assert.match(snapshotSQL('pc'), /public\.futbot_pc_bin_history/);
   assert.match(snapshotSQL('ps5'), /l\.lowest_bin>20000 OR p\.rating>85/);
+  assert.match(historySQL('ps5'), /lowest_bin<15000000/g);
 });
 test('snapshot SQL selects fresh eligible latest prices and limits subsequent reads to selected IDs', async () => {
   const {PGlite} = await import('@electric-sql/pglite');
