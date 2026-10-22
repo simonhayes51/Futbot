@@ -1,7 +1,8 @@
 # Private BIN flip scanner test
 
-Runs separately from the bot. No public commands, Discord posts, AI, browser,
-sales-price dependency, database writes or schema migration. Uses the existing
+Runs separately from the bot. It can optionally post live, rule-qualified calls
+to one explicitly configured private Discord channel. It has no public commands,
+AI, browser, sales-price dependency, database writes or schema migration. Uses the existing
 `PRICE_DATABASE_URL` data and the repository's `pg` dependency. Node 22+.
 
 ## Run
@@ -19,7 +20,20 @@ Alternatively schedule `--once` every 15 minutes, using the SAME persistent dire
 Use one service/process only. Existing bot startup is not changed.
 
 Required: `PRICE_DATABASE_URL`. Existing `GAME_YEAR` (default 27) and `PLATFORM`
-(default ps5, or pc) are reused. No Discord token or APP database is needed.
+(default ps5, or pc) are reused. No APP database is needed.
+
+Discord posting is off unless both of these Railway variables are set:
+
+- `DISCORD_TOKEN`: FutBot's existing bot token.
+- `FLIP_TEST_DISCORD_CHANNEL_ID`: ID of the private server text channel.
+
+The target must have an explicit `@everyone` deny for **View Channel**. FutBot
+also needs View Channel, Send Messages and Embed Links there. The scanner refuses
+to post if the target is public or is not a server text/announcement channel.
+It posts only newly generated live `signals`; historical replay examples and
+diagnostic runs are never posted. Pending sends are retried, and Discord nonces
+prevent duplicate messages if Railway restarts during a send. Keep the scanner's
+persistent state directory enabled so cooldowns and its send queue survive restarts.
 
 Optional:
 
@@ -155,9 +169,9 @@ or above the target, at least ten minutes apart, before expiry. It is **not** a
 completed sale or realised profit. Missing/stale data cannot prove trade failure;
 `expired` means the target was not confirmed in the collected data.
 
-The script never posts to Discord, so only people with access to these private
-files/service logs can see the test. No automatic/public rollout is enabled.
-Thresholds need evaluation against the collected results before using calls live.
+With Discord posting disabled, only people with access to the service logs can
+see the test. Calls are still based on observed BINs and are not completed sales
+or guaranteed profit.
 
 If a process is killed abruptly, `scanner.lock` may remain. Stop/verify that no
 scanner is running, then remove that one lock file before restarting. Never delete
