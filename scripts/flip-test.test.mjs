@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory} from './flip-test.mjs';
+import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls} from './flip-test.mjs';
 
 const H = 3_600_000, now = Date.UTC(2026, 9, 19, 12);
 function card() {
@@ -21,6 +21,16 @@ test('repeated dips qualify, isolated peaks cannot raise target', () => {
   assert.equal(baseline.target, 103_800);
   c.history[50].values = [900_000];
   assert.equal(evaluate(c, now).target, baseline.target);
+});
+test('historical replay surfaces past qualifying entries separately from live calls', () => {
+  const c = card(); c.id = 'historical-1';
+  const replay = replayHistoricalPulls(c, now);
+  assert.ok(replay.count > 0);
+  assert.ok(replay.targetObserved > 0);
+  assert.ok(replay.examples.every(s => s.entryBin < s.baselineBin && s.estimatedNetAfterTax > 0));
+  assert.ok(replay.examples.some(s => s.outcome === 'target_observed'));
+  const recentOnly = {...c, history: c.history.filter(p => p.at >= now - 12 * H)};
+  assert.equal(replayHistoricalPulls(recentOnly, now).count, 0);
 });
 test('rejects falling trends, thin history, unstable prices and stale confirmations', () => {
   const c = card();
@@ -70,6 +80,8 @@ test('candidate log is capped, deduplicated and outcomes require sustained later
   state.cards[id].recent = [1, 16, 31].map(m => ({at: now + m * 60_000, price: call.target}));
   const outcome = scan(state, rows.map(r => r.id === id ? {...r, at: now + 31 * 60_000, price: call.target} : r), now + 32 * 60_000);
   assert.ok(outcome.outcomes.some(c => c.id === id && c.status === 'target_observed'));
+  assert.ok(outcome.historicalPulls);
+  assert.match(outcome.historicalPulls.disclaimer, /Retrospective BIN replay only/);
 });
 test('expired calls do not count targets first observed after expiry', () => {
   const state = emptyState(); state.calls = [{id: '1', status: 'open', createdAt: now - 13 * H, expiresAt: now - H, target: 100_000}];
@@ -99,7 +111,7 @@ test('snapshot SQL selects fresh eligible latest prices and limits subsequent re
       INSERT INTO futgg_bin_history(source_card_id,game_year,platform,lowest_bin,captured_at) VALUES
       (1,27,'ps5',20000,now()),(2,27,'ps5',20001,now()),(3,27,'ps5',1000,now()),
       (4,27,'ps5',40000,now()),(5,26,'ps5',40000,now()),(6,27,'ps5',40000,now()-interval '2 hours'),
-      (2,27,'ps5',999999,now()-interval '10 minutes'),(1,27,'pc',40000,now());`);
+      (2,27,'ps5',999999,now()-interval '61 minutes'),(1,27,'pc',40000,now());`);
     const discovered = await db.query(snapshotSQL('ps5'), [27, 'ps5', null, 300]);
     assert.deepEqual(discovered.rows.map(r => r.id).sort(), ['2', '3']);
     assert.equal(Number(discovered.rows.find(r => r.id === '2').price), 20001);
@@ -109,8 +121,8 @@ test('snapshot SQL selects fresh eligible latest prices and limits subsequent re
       (2,27,'ps5',21000,now()-interval '16 minutes'),(2,27,'ps5',22000,now()-interval '31 minutes'),
       (2,27,'ps5',23000,now()-interval '46 minutes'),(2,27,'ps5',100,now()+interval '1 hour'),
       (2,27,'ps5',100,now()-interval '8 days'),(2,26,'ps5',100,now()-interval '2 hours'),
-      (2,27,'pc',100,now()-interval '2 hours'),(2,27,'ps5',30000,now()-interval '2 hours'),
-      (2,27,'ps5',50000,now()-interval '2 hours'),
+      (2,27,'pc',100,now()-interval '2 hours'),(2,27,'ps5',40000,now()-interval '2 hours'),
+      (2,27,'ps5',40000,now()-interval '2 hours'),
       (2,27,'ps5',60000,now()-interval '3 days');`);
     const asOf = new Date();
     const seeded = await db.query(historySQL('ps5'), [27, 'ps5', ['2'], asOf]);
@@ -207,13 +219,14 @@ test('history diagnostic explains strict and exploratory coverage without signal
   function historyCard(id, counts) {
     const c = card();
     c.id = id;
+    c.recent = [];
     c.history = counts.flatMap((count, day) => Array.from({length: count}, (_, i) => ({
       at: now - (day + 1) * 24 * H + i * H, values: [100_000]
     })));
     return c;
   }
-  state.cards = {thin: historyCard('thin', [18, 24, 11]), complete: historyCard('complete', [22, 24, 24])};
-  const rows = state.ids.map(id => ({id, name: id, rating: 87, price: 100_000, at: now - 60_000}));
+  state.cards = {thin: historyCard('thin', [17, 24, 11]), complete: historyCard('complete', [22, 24, 24])};
+  const rows = state.ids.map(id => ({id, name: id, rating: 87, price: 100_000, at: now - 59_000}));
   const report = diagnoseHistory(state, rows, now);
   assert.equal(report.mode, 'history_diagnostic_only');
   assert.equal(report.summary.strictHistoryPass, 1);
