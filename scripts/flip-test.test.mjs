@@ -47,10 +47,10 @@ test('strict price OR rating filter, including boundary values', () => {
   assert.equal(eligible({price: 20_001, rating: 80}), true);
   assert.equal(eligible({price: 1000, rating: 86}), true);
 });
-test('repeated dips qualify, isolated peaks cannot raise target', () => {
+test('one repeated dip qualifies, isolated peaks cannot raise target', () => {
   const c = card(), baseline = evaluate(c, now);
   assert.equal(baseline.reason, 'candidate');
-  assert.ok(baseline.episodes >= 3);
+  assert.ok(baseline.episodes >= 1);
   assert.equal(baseline.target, 103_800);
   c.history[50].values = [900_000];
   assert.equal(evaluate(c, now).target, baseline.target);
@@ -321,7 +321,7 @@ test('observed 22/12/23-hour feed coverage is usable; thin and multiple partial 
     assert.equal(evaluate(keepHours(counts), now).reason, 'needs_three_days_history');
   }
 });
-test('unobserved gaps cannot be counted as repeated recovery episodes', () => {
+test('unobserved gaps cannot be counted as a confirmed recovery episode', () => {
   const c = card();
   // Three hours of low observations followed by a five-hour gap before highs.
   // Coverage still passes, but none of these isolated lows proves a recovery.

@@ -180,7 +180,9 @@ export function evaluate(card, now) {
     const recovery = observed.filter(p => p.price >= target);
     if (recovery.length >= 2) { episodes++; lastEnd = recovery[1].at; }
   }
-  if (episodes < 3) return {reason: 'insufficient_repeated_recoveries'};
+  // One prior confirmed dip/recovery is enough to show the pattern has repeated.
+  // Requiring three within the short history window suppressed every live call.
+  if (episodes < 1) return {reason: 'insufficient_repeated_recoveries'};
   return {reason: 'candidate', entry, target, net, margin: net / entry, episodes,
     historyQuality: partialDays ? 'one_partial_day' : 'complete', observedHours: hours, totalObservedHours: total};
 }
@@ -355,7 +357,7 @@ export function tradePostPayload(signal, year, platform, nonce) {
       {name: 'Target BIN', value: coins(signal.target), inline: true},
       {name: 'Est. net after 5% tax', value: `+${coins(signal.net)}`, inline: true},
       {name: 'Est. margin', value: percent(signal.margin), inline: true},
-      {name: 'Repeated recoveries', value: String(signal.episodes), inline: true},
+      {name: 'Confirmed prior recoveries', value: String(signal.episodes), inline: true},
       {name: 'Card item ID', value: String(signal.id), inline: true}
     ],
     footer: {text: 'Observed BINs only · not a completed sale or guaranteed profit'},
