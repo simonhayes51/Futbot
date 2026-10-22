@@ -267,10 +267,13 @@ export function scan(state, rows, now = Date.now()) {
   state.calls = state.calls.filter(c => c.createdAt >= now - 7 * DAY);
   const coverageChecks = cards.map(c => historyCoverage(c, now));
   const historicalPulls = cards.map(c => replayHistoricalPulls(c, now, 2));
-  const allSetups = historicalPulls.flatMap(c => c.examples);
-  const historicalExamples = allSetups
-    .sort((a, b) => Number(b.outcome === 'target_observed') - Number(a.outcome === 'target_observed') ||
-      b.estimatedNetAfterTax - a.estimatedNetAfterTax).slice(0, 10);
+  const allSetups = historicalPulls.flatMap(c => c.allSetups);
+  const byEstimatedNet = (a, b) => b.estimatedNetAfterTax - a.estimatedNetAfterTax;
+  const successfulExamples = allSetups.filter(setup => setup.outcome === 'target_observed')
+    .sort(byEstimatedNet).slice(0, 5);
+  const missedExamples = allSetups.filter(setup => setup.outcome !== 'target_observed')
+    .sort(byEstimatedNet).slice(0, 5);
+  const historicalExamples = [...successfulExamples, ...missedExamples];
   const replayStats = historicalPulls.reduce((acc, result) => {
     acc.setups += result.count;
     acc.targetObserved12h += result.targetObserved;
@@ -311,7 +314,7 @@ export function scan(state, rows, now = Date.now()) {
       byDipDepth: replayStats.byDipDepth, byPriorTrend: replayStats.byPriorTrend,
       learning: {resolved12h: replayStats.horizons['12h'].resolved, sampleForCalibration: 50,
         status: replayStats.horizons['12h'].resolved >= 50 ? 'review_threshold_met' : 'collecting',
-        liveRulesChanged: false}, examples: historicalExamples,
+        liveRulesChanged: false}, successfulExamples, missedExamples, examples: historicalExamples,
       disclaimer: 'Retrospective BIN replay only. These are past setups scored using later observations, not live buy calls or completed sales.'},
     disclaimer: 'BIN observations only; target observed does not mean a completed sale or realised profit.'};
 }
@@ -361,7 +364,14 @@ export function formatReport(report) {
     if (trends.length) lines.push(`By prior trend: ${trends.join(' · ')}`);
     if (historical.learning) lines.push(`Learning sample: ${historical.learning.resolved12h}/${historical.learning.sampleForCalibration} resolved setups · ${historical.learning.status.replaceAll('_', ' ')} · live rules unchanged`);
   }
-  for (const setup of historical.examples ?? []) {
+  const exampleGroups = [
+    ['Successful historical setups', historical.successfulExamples ?? (historical.examples ?? []).filter(s => s.outcome === 'target_observed')],
+    ['Missed historical setups', historical.missedExamples ?? (historical.examples ?? []).filter(s => s.outcome !== 'target_observed')]
+  ];
+  for (const [heading, examples] of exampleGroups) {
+    if (!examples.length) continue;
+    lines.push(`${heading}:`);
+    for (const setup of examples) {
     const observed = setup.outcome === 'target_observed';
     const laterHorizon = [24, 48].find(hours => setup.horizons?.[`${hours}h`]?.status === 'target_observed');
     const outcome = observed
@@ -369,8 +379,10 @@ export function formatReport(report) {
       : laterHorizon ? `not by 12h · observed by ${laterHorizon}h`
         : `not observed by ${[48, 24, 12].find(hours => setup.horizons?.[`${hours}h`]) ?? 12}h`;
     lines.push(`  ${observed ? '✓' : '·'} ${cardLabel(setup)} [${setup.id}] · ${setup.entryAt?.slice(0, 16).replace('T', ' ')} UTC · buy ${coins(setup.entryBin)} → target ${coins(setup.targetBin)} · est. net +${coins(setup.estimatedNetAfterTax)} (${percent(setup.estimatedMargin)}) · ${outcome}`);
+    }
   }
-  if (!(historical.examples ?? []).length) lines.push('  No qualifying past setups in the replay window.');
+  if (!(historical.examples ?? []).length && !(historical.successfulExamples ?? []).length && !(historical.missedExamples ?? []).length)
+    lines.push('  No qualifying past setups in the replay window.');
   if (Object.keys(report.reasons ?? {}).length) {
     lines.push(`Candidate checks: ${Object.entries(report.reasons).map(([reason, count]) => `${reason.replaceAll('_', ' ')} ${count}`).join(' · ')}`);
   }
