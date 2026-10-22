@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// Private BIN-only experiment. No Discord, web scraping, AI, or database writes.
+// Private BIN scanner. It may post only live, rule-qualified calls to an explicitly configured private Discord channel.
 import {readFile, mkdir, writeFile, rename, open, unlink} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
+import {createHash} from 'node:crypto';
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;
 const REPLAY_HORIZONS = [12, 24, 48];
@@ -17,7 +18,7 @@ function quantile(values, fraction) {
 }
 const change = (value, baseline) => value / baseline - 1;
 export function emptyState(year = 27, platform = 'ps5') {
-  return {version: 1, year, platform, selectedAt: 0, ids: [], cards: {}, pauseUntil: 0, calls: []};
+  return {version: 1, year, platform, selectedAt: 0, ids: [], cards: {}, pauseUntil: 0, calls: [], pendingPosts: [], postedKeys: []};
 }
 
 // Hourly medians for history; three separate fresh observations for confirmation.
@@ -329,6 +330,106 @@ function cardLabel(card) {
   return details ? `${name} (${details})` : name;
 }
 
+const VIEW_CHANNEL = 1n << 10n;
+export function privateChannelProblem(channel) {
+  if (!channel || !channel.guild_id || ![0, 5].includes(channel.type)) return 'Target must be a server text or announcement channel.';
+  const everyone = (channel.permission_overwrites ?? []).find(overwrite =>
+    String(overwrite.id) === String(channel.guild_id) && Number(overwrite.type) === 0);
+  if (!everyone || (BigInt(everyone.deny ?? '0') & VIEW_CHANNEL) === 0n)
+    return 'Target channel is not private: deny @everyone View Channel before enabling trade posts.';
+  return null;
+}
+
+export function tradePostPayload(signal, year, platform, nonce) {
+  const name = usableName(signal.name) ?? `Unknown card ${signal.id}`;
+  const variant = [Number.isInteger(signal.rating) && signal.rating > 0 ? `${signal.rating} rated` : null, signal.rarity]
+    .filter(Boolean).join(' · ');
+  const timestamp = Number.isFinite(Date.parse(signal.sourceAt)) ? new Date(signal.sourceAt).toISOString() : new Date().toISOString();
+  return {nonce, enforce_nonce: true, allowed_mentions: {parse: []}, embeds: [{
+    title: `📈 BUY IDEA · ${name}`.slice(0, 256),
+    description: [variant, `**${platform.toUpperCase()} · FC${year}**`,
+      'BIN-based flip idea from repeated historical dips and recoveries. Check the market before buying.'].filter(Boolean).join('\n'),
+    color: 0x5865f2,
+    fields: [
+      {name: 'Buy BIN', value: coins(signal.entry), inline: true},
+      {name: 'Target BIN', value: coins(signal.target), inline: true},
+      {name: 'Est. net after 5% tax', value: `+${coins(signal.net)}`, inline: true},
+      {name: 'Est. margin', value: percent(signal.margin), inline: true},
+      {name: 'Repeated recoveries', value: String(signal.episodes), inline: true},
+      {name: 'Card item ID', value: String(signal.id), inline: true}
+    ],
+    footer: {text: 'Observed BINs only · not a completed sale or guaranteed profit'},
+    timestamp
+  }]};
+}
+
+export function queueSignalPosts(state, signals, at, year = state.year, platform = state.platform) {
+  state.pendingPosts ??= [];
+  state.postedKeys ??= [];
+  const existing = new Set([...state.postedKeys, ...state.pendingPosts.map(post => post.key)]);
+  for (const signal of signals) {
+    const key = `${year}:${platform}:${signal.id}:${signal.sourceAt}`;
+    if (existing.has(key)) continue;
+    state.pendingPosts.push({key, signal, at, attempts: 0});
+    existing.add(key);
+  }
+  // Bound a prolonged Discord outage; current calls remain visible in state and logs.
+  state.pendingPosts = state.pendingPosts.slice(-50);
+  return state.pendingPosts.length;
+}
+
+async function discordJSON(path, token, fetchImpl, init = {}) {
+  const response = await fetchImpl(`https://discord.com/api/v10${path}`, {
+    ...init, signal: AbortSignal.timeout(10_000),
+    headers: {Authorization: `Bot ${token}`, ...(init.headers ?? {})}
+  });
+  if (!response.ok) {
+    let message = '';
+    try {message = (await response.json()).message ?? '';} catch {}
+    throw new Error(`Discord API ${response.status}${message ? `: ${String(message).slice(0, 160)}` : ''}`);
+  }
+  return response.status === 204 ? null : response.json();
+}
+
+export async function validatePrivateChannel(channelId, token, fetchImpl = fetch) {
+  if (!/^\d{17,20}$/.test(String(channelId))) throw new Error('FLIP_TEST_DISCORD_CHANNEL_ID must be a Discord channel ID.');
+  const channel = await discordJSON(`/channels/${channelId}`, token, fetchImpl);
+  const problem = privateChannelProblem(channel);
+  if (problem) throw new Error(problem);
+  return channel;
+}
+
+export async function sendTradePost(channelId, token, signal, year, platform, fetchImpl = fetch) {
+  const nonce = createHash('sha256').update(`${year}:${platform}:${signal.id}:${signal.sourceAt}`).digest('hex').slice(0, 24);
+  return discordJSON(`/channels/${channelId}/messages`, token, fetchImpl, {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(tradePostPayload(signal, year, platform, nonce))
+  });
+}
+
+export async function deliverPendingPosts(state, {channelId, token, year = state.year,
+  platform = state.platform, fetchImpl = fetch}) {
+  state.pendingPosts ??= [];
+  state.postedKeys ??= [];
+  if (!channelId) return {enabled: false, posted: 0, pending: state.pendingPosts.length, error: null};
+  if (!token) return {enabled: true, posted: 0, pending: state.pendingPosts.length, error: 'DISCORD_TOKEN is missing.'};
+  if (!state.pendingPosts.length) return {enabled: true, posted: 0, pending: 0, error: null};
+  try {await validatePrivateChannel(channelId, token, fetchImpl);}
+  catch (error) {return {enabled: true, posted: 0, pending: state.pendingPosts.length, error: error.message};}
+  let posted = 0, error = null;
+  for (const post of [...state.pendingPosts]) {
+    post.attempts = (post.attempts ?? 0) + 1;
+    try {
+      await sendTradePost(channelId, token, post.signal, year, platform, fetchImpl);
+      state.pendingPosts = state.pendingPosts.filter(item => item.key !== post.key);
+      state.postedKeys.push(post.key);
+      state.postedKeys = state.postedKeys.slice(-500);
+      posted++;
+    } catch (failure) {error = failure.message; break;}
+  }
+  return {enabled: true, posted, pending: state.pendingPosts.length, error};
+}
+
 // Human-readable Railway output; latest.json remains structured for analysis.
 export function formatReport(report) {
   const at = new Date(report.at);
@@ -341,6 +442,9 @@ export function formatReport(report) {
     `Market: ${market.covered ? 'covered' : 'warming up'} · median ${percent(market.medianChange)} · falling ${percent(market.fallingShare)}${market.crash ? ' · CRASH PAUSE' : ''}`,
     `Live buy calls: ${report.signals?.length ?? 0}${report.paused ? ` · paused (${report.pauseReason ?? 'market safety check'})` : ''}`
   ];
+  if (report.discordPosting?.enabled) {
+    lines.push(`Discord posts: ${report.discordPosting.posted} sent · ${report.discordPosting.pending} pending${report.discordPosting.error ? ` · ${report.discordPosting.error}` : ''}`);
+  } else lines.push('Discord posts: off · set FLIP_TEST_DISCORD_CHANNEL_ID to enable');
   for (const signal of report.signals ?? []) {
     lines.push(`  BUY CHECK · ${cardLabel(signal)} · entry ${coins(signal.entry)} → target ${coins(signal.target)} · est. net +${coins(signal.net)} · ${signal.episodes} recoveries`);
   }
@@ -483,6 +587,9 @@ async function atomicJSON(file, data) {
 async function main() {
   const year = Number(process.env.GAME_YEAR ?? 27), platform = process.env.PLATFORM ?? 'ps5';
   const cap = Number(process.env.FLIP_TEST_MAX_CARDS ?? 300);
+  const discordChannelId = process.env.FLIP_TEST_DISCORD_CHANNEL_ID?.trim() ?? '';
+  const discordToken = process.env.DISCORD_TOKEN?.trim() ?? '';
+  if (discordChannelId && !discordToken) throw new Error('Set DISCORD_TOKEN when FLIP_TEST_DISCORD_CHANNEL_ID is configured.');
   if (!Number.isInteger(year) || year < 20 || !Number.isInteger(cap) || cap < 20 || cap > 1000)
     throw new Error('Use a valid GAME_YEAR and FLIP_TEST_MAX_CARDS from 20 to 1000');
   const sql = snapshotSQL(platform);
@@ -505,6 +612,8 @@ async function main() {
     catch (error) {if (error.code !== 'ENOENT') throw error; state = emptyState(year, platform);}
     if (state.version !== 1 || state.year !== year || state.platform !== platform)
       throw new Error('State does not match scanner version/year/platform');
+    state.pendingPosts ??= [];
+    state.postedKeys ??= [];
     if (!process.env.PRICE_DATABASE_URL) throw new Error('PRICE_DATABASE_URL is required');
     const {default: pg} = await import('pg');
     pool = new pg.Pool({connectionString: process.env.PRICE_DATABASE_URL, max: 1,
@@ -554,6 +663,14 @@ async function main() {
       }
       const report = process.argv.includes('--diagnose-history')
         ? diagnoseHistory(state, rows, Date.now()) : scan(state, rows, Date.now());
+      if (discordChannelId && report.mode === 'private_bin_test')
+        queueSignalPosts(state, report.signals, report.at, year, platform);
+      // Save the durable queue before contacting Discord. Discord's enforced nonce
+      // makes retries safe if the process exits after a send but before this save.
+      await atomicJSON(file, state);
+      report.discordPosting = process.argv.includes('--diagnose-history')
+        ? {enabled: Boolean(discordChannelId), posted: 0, pending: state.pendingPosts.length, error: 'Diagnostic mode never posts.'}
+        : await deliverPendingPosts(state, {channelId: discordChannelId, token: discordToken, year, platform});
       report.historyLoaded = {cards: unseeded.length, rows: historyRows};
       report.historyRefreshed = {cards: catchup.length, rows: refreshedRows, hours: catchup.length ? catchupHours : 0};
       state.lastScanAt = Date.now();
