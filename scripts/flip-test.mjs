@@ -6,6 +6,7 @@ import {pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 
 const HOUR = 3_600_000, DAY = 24 * HOUR;
+const REPLAY_HORIZONS = [12, 24, 48];
 export const eligible = card => card.price > 20_000 || card.rating > 85;
 const median = values => quantile(values, 0.5);
 function quantile(values, fraction) {
@@ -194,34 +195,45 @@ export function replayHistoricalPulls(card, now, limit = 5) {
   let blockedUntil = -Infinity;
   for (let i = 12; i < h.length - 1; i++) {
     const dip = h[i];
-    // Do not grade an incomplete 12-hour outcome window as a failed setup.
+    // Only count setups with a complete 12-hour outcome window. Longer windows
+    // remain null until enough later observations exist; missing data is not a loss.
     if (dip.at + 12 * HOUR > lastObservedAt) continue;
     if (dip.at <= blockedUntil) continue;
     const baselineRows = h.filter(p => p.at >= dip.at - DAY && p.at < dip.at);
     if (baselineRows.length < 12) continue;
     const baseline = median(baselineRows.map(p => p.price));
+    const priorRows = h.filter(p => p.at >= dip.at - 2 * DAY && p.at < dip.at - DAY);
+    const priorMedian = priorRows.length >= 12 ? median(priorRows.map(p => p.price)) : null;
     const target = Math.floor(baseline * 0.98 / 100) * 100;
     const entry = dip.price;
     const net = Math.floor(target * 0.95) - entry;
     if (entry > baseline * 0.90 || net < 1500 || net / entry < 0.05) continue;
 
-    const future = h.slice(i + 1).filter(p => p.at <= dip.at + 12 * HOUR);
-    const recovery = future.filter(p => p.price >= target);
-    const reached = recovery.length >= 2 && recovery[1].at - recovery[0].at >= HOUR;
-    const recoveredAt = reached ? recovery[1].at : null;
+    const horizonResults = Object.fromEntries(REPLAY_HORIZONS.map(hours => {
+      if (dip.at + hours * HOUR > lastObservedAt) return [`${hours}h`, null];
+      const recovery = h.slice(i + 1).filter(p => p.at <= dip.at + hours * HOUR && p.price >= target);
+      const confirm = recovery.find((point, index) => recovery.slice(index + 1).some(later => later.at - point.at >= HOUR));
+      const later = confirm && recovery.find(point => point.at - confirm.at >= HOUR);
+      return [`${hours}h`, later ? {status: 'target_observed', at: new Date(later.at).toISOString()} : {status: 'not_observed'}];
+    }));
+    const reached = horizonResults['12h']?.status === 'target_observed';
+    const recoveredAt = reached ? new Date(horizonResults['12h'].at).getTime() : null;
     setups.push({id: String(card.id ?? ''), name: card.name ?? null, rarity: card.rarity ?? null,
       rating: Number.isFinite(card.rating) ? card.rating : null, entryAt: new Date(dip.at).toISOString(),
       entryBin: entry, baselineBin: Math.round(baseline), targetBin: target,
+      dipDepth: 1 - entry / baseline,
+      priorTrend: priorMedian ? baseline / priorMedian - 1 : null,
       estimatedNetAfterTax: net, estimatedMargin: net / entry,
       outcome: reached ? 'target_observed' : 'target_not_observed_within_12h',
-      targetObservedAt: recoveredAt === null ? null : new Date(recoveredAt).toISOString()});
+      targetObservedAt: recoveredAt === null ? null : new Date(recoveredAt).toISOString(),
+      horizons: horizonResults});
     // Treat one fall and its recovery (or 12-hour observation window) as one setup.
     blockedUntil = recoveredAt ?? dip.at + 12 * HOUR;
   }
   const ranked = setups.sort((a, b) => Number(b.outcome === 'target_observed') - Number(a.outcome === 'target_observed') ||
     b.estimatedNetAfterTax - a.estimatedNetAfterTax);
   return {count: setups.length, targetObserved: setups.filter(s => s.outcome === 'target_observed').length,
-    examples: ranked.slice(0, limit)};
+    allSetups: ranked, examples: ranked.slice(0, limit)};
 }
 
 export function scan(state, rows, now = Date.now()) {
@@ -255,9 +267,38 @@ export function scan(state, rows, now = Date.now()) {
   state.calls = state.calls.filter(c => c.createdAt >= now - 7 * DAY);
   const coverageChecks = cards.map(c => historyCoverage(c, now));
   const historicalPulls = cards.map(c => replayHistoricalPulls(c, now, 2));
-  const historicalExamples = historicalPulls.flatMap(c => c.examples)
+  const allSetups = historicalPulls.flatMap(c => c.examples);
+  const historicalExamples = allSetups
     .sort((a, b) => Number(b.outcome === 'target_observed') - Number(a.outcome === 'target_observed') ||
       b.estimatedNetAfterTax - a.estimatedNetAfterTax).slice(0, 10);
+  const replayStats = historicalPulls.reduce((acc, result) => {
+    acc.setups += result.count;
+    acc.targetObserved12h += result.targetObserved;
+    for (const setup of result.allSetups) {
+      const bucket = setup.dipDepth < 0.15 ? '10–15% dip' : setup.dipDepth < 0.25 ? '15–25% dip' : '25%+ dip';
+      const trendBucket = setup.priorTrend === null ? 'unknown prior trend' : setup.priorTrend > 0.03 ? 'rising market' :
+        setup.priorTrend < -0.03 ? 'falling market' : 'flat market';
+      for (const [field, label] of [['byDipDepth', bucket], ['byPriorTrend', trendBucket]]) {
+        const group = acc[field][label] ??= {setups: 0, horizons: Object.fromEntries(REPLAY_HORIZONS.map(hours => [
+          `${hours}h`, {resolved: 0, targetObserved: 0}]))};
+        group.setups++;
+        for (const hours of REPLAY_HORIZONS) {
+          const stat = group.horizons[`${hours}h`], resultAtHorizon = setup.horizons?.[`${hours}h`];
+          if (resultAtHorizon) {stat.resolved++; if (resultAtHorizon.status === 'target_observed') stat.targetObserved++;}
+        }
+      }
+      for (const hours of REPLAY_HORIZONS) {
+        const stat = acc.horizons[`${hours}h`], resultAtHorizon = setup.horizons?.[`${hours}h`];
+        if (resultAtHorizon) {stat.resolved++; if (resultAtHorizon.status === 'target_observed') stat.targetObserved++;}
+      }
+    }
+    return acc;
+  }, {setups: 0, targetObserved12h: 0,
+    horizons: Object.fromEntries(REPLAY_HORIZONS.map(hours => [`${hours}h`, {resolved: 0, targetObserved: 0}])),
+    byDipDepth: {}, byPriorTrend: {}});
+  for (const field of ['byDipDepth', 'byPriorTrend']) for (const stat of Object.values(replayStats[field]))
+    for (const value of Object.values(stat.horizons)) value.hitRate = value.resolved ? value.targetObserved / value.resolved : null;
+  for (const value of Object.values(replayStats.horizons)) value.hitRate = value.resolved ? value.targetObserved / value.resolved : null;
   return {at: new Date(now).toISOString(), mode: 'private_bin_test', year: state.year, platform: state.platform,
     tracked: state.ids.length, fresh: cards.length,
     historyCoverage: {usableCards: coverageChecks.filter(c => c.usable).length,
@@ -265,8 +306,12 @@ export function scan(state, rows, now = Date.now()) {
       medianHoursByDay: [0, 1, 2].map(i => median(coverageChecks.map(c => c.hours[i])))},
     paused, pauseReason: !coverage ? 'insufficient_fresh_coverage' : !market.covered ? 'market_history_warming_up' :
       now < state.pauseUntil ? 'market_drop_cooldown' : null, market, reasons, signals, outcomes,
-    historicalPulls: {setups: historicalPulls.reduce((n, c) => n + c.count, 0),
-      targetObserved: historicalPulls.reduce((n, c) => n + c.targetObserved, 0), examples: historicalExamples,
+    historicalPulls: {setups: replayStats.setups,
+      targetObserved: replayStats.targetObserved12h, horizons: replayStats.horizons,
+      byDipDepth: replayStats.byDipDepth, byPriorTrend: replayStats.byPriorTrend,
+      learning: {resolved12h: replayStats.horizons['12h'].resolved, sampleForCalibration: 50,
+        status: replayStats.horizons['12h'].resolved >= 50 ? 'review_threshold_met' : 'collecting',
+        liveRulesChanged: false}, examples: historicalExamples,
       disclaimer: 'Retrospective BIN replay only. These are past setups scored using later observations, not live buy calls or completed sales.'},
     disclaimer: 'BIN observations only; target observed does not mean a completed sale or realised profit.'};
 }
@@ -299,11 +344,30 @@ export function formatReport(report) {
   if (!(report.signals ?? []).length) lines.push('  None this scan.');
 
   lines.push(`Historical setups: ${historical.setups ?? 0} · target observed ${historical.targetObserved ?? 0}`);
+  if (historical.horizons) {
+    lines.push(`Recovery by horizon: ${REPLAY_HORIZONS.map(hours => {
+      const stat = historical.horizons[`${hours}h`];
+      return `${hours}h ${stat?.targetObserved ?? 0}/${stat?.resolved ?? 0} (${percent(stat?.hitRate)})`;
+    }).join(' · ')}`);
+    const cohorts = Object.entries(historical.byDipDepth ?? {}).map(([bucket, stats]) => {
+      const stat = stats.horizons?.['24h'];
+      return `${bucket}: ${stat?.targetObserved ?? 0}/${stat?.resolved ?? 0} 24h (${percent(stat?.hitRate)})`;
+    });
+    if (cohorts.length) lines.push(`By dip depth: ${cohorts.join(' · ')}`);
+    const trends = Object.entries(historical.byPriorTrend ?? {}).map(([bucket, stats]) => {
+      const stat = stats.horizons?.['24h'];
+      return `${bucket}: ${stat?.targetObserved ?? 0}/${stat?.resolved ?? 0} 24h (${percent(stat?.hitRate)})`;
+    });
+    if (trends.length) lines.push(`By prior trend: ${trends.join(' · ')}`);
+    if (historical.learning) lines.push(`Learning sample: ${historical.learning.resolved12h}/${historical.learning.sampleForCalibration} resolved setups · ${historical.learning.status.replaceAll('_', ' ')} · live rules unchanged`);
+  }
   for (const setup of historical.examples ?? []) {
     const observed = setup.outcome === 'target_observed';
+    const laterHorizon = [24, 48].find(hours => setup.horizons?.[`${hours}h`]?.status === 'target_observed');
     const outcome = observed
-      ? `TARGET OBSERVED${setup.targetObservedAt ? ` at ${setup.targetObservedAt.slice(11, 16)} UTC` : ''}`
-      : 'not confirmed within 12h';
+      ? `TARGET OBSERVED by 12h${setup.targetObservedAt ? ` at ${setup.targetObservedAt.slice(11, 16)} UTC` : ''}`
+      : laterHorizon ? `not by 12h · observed by ${laterHorizon}h`
+        : `not observed by ${[48, 24, 12].find(hours => setup.horizons?.[`${hours}h`]) ?? 12}h`;
     lines.push(`  ${observed ? '✓' : '·'} ${cardLabel(setup)} [${setup.id}] · ${setup.entryAt?.slice(0, 16).replace('T', ' ')} UTC · buy ${coins(setup.entryBin)} → target ${coins(setup.targetBin)} · est. net +${coins(setup.estimatedNetAfterTax)} (${percent(setup.estimatedMargin)}) · ${outcome}`);
   }
   if (!(historical.examples ?? []).length) lines.push('  No qualifying past setups in the replay window.');
