@@ -53,10 +53,14 @@ test('human report formats historical trades and keeps live calls clearly separa
         '24h': {resolved: 80, targetObserved: 40, hitRate: 0.5}, '48h': {resolved: 50, targetObserved: 45, hitRate: 0.9}},
       byDipDepth: {'15–25% dip': {horizons: {'24h': {resolved: 40, targetObserved: 30, hitRate: 0.75}}}},
       learning: {resolved12h: 106, sampleForCalibration: 50, status: 'review_threshold_met'},
-      examples: [{id: '67338422', name: 'Dayot Upamecano',
+      successfulExamples: [{id: '67338422', name: 'Dayot Upamecano',
       rating: 89, rarity: 'Destined for Glory · Pristine Holographic', entryAt: '2026-10-22T00:00:00.000Z',
       entryBin: 2400000, targetBin: 2744000, estimatedNetAfterTax: 206800, estimatedMargin: 0.086,
-      outcome: 'target_observed', targetObservedAt: '2026-10-22T09:00:00.000Z'}]}});
+      outcome: 'target_observed', targetObservedAt: '2026-10-22T09:00:00.000Z'}],
+      missedExamples: [{id: 'miss-1', name: 'Missed Example', rating: 87, rarity: 'Rare',
+        entryAt: '2026-10-21T00:00:00.000Z', entryBin: 50_000, targetBin: 60_000,
+        estimatedNetAfterTax: 7_000, estimatedMargin: 0.14, outcome: 'target_not_observed_within_12h',
+        horizons: {'24h': {status: 'not_observed'}, '48h': {status: 'not_observed'}}}]}});
   assert.match(output, /Historical setups: 106 · target observed 29/);
   assert.match(output, /Recovery by horizon: 12h 29\/106/);
   assert.match(output, /By dip depth: 15–25% dip: 30\/40 24h/);
@@ -64,6 +68,9 @@ test('human report formats historical trades and keeps live calls clearly separa
   assert.match(output, /Dayot Upamecano \(89 · Destined for Glory · Pristine Holographic\)/);
   assert.match(output, /buy 2,400,000 coins → target 2,744,000 coins/);
   assert.match(output, /TARGET OBSERVED by 12h at 09:00 UTC/);
+  assert.match(output, /Successful historical setups:/);
+  assert.match(output, /Missed historical setups:/);
+  assert.match(output, /Missed Example.*not observed by 48h/);
   assert.match(output, /Live buy calls: 0/);
   assert.doesNotMatch(output, /LIVE BUY CALL/);
 });
