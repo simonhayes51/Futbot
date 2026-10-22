@@ -432,6 +432,25 @@ export async function deliverPendingPosts(state, {channelId, token, year = state
 
 // Shared application DB hands new live calls to the existing FutBot process.
 // The price database remains read-only; no Discord token is needed in this mode.
+export function botQueueProblem(error) {
+  const rawCode = error?.code ?? error?.cause?.code ?? error?.errors?.[0]?.code;
+  const code = typeof rawCode === 'string' && /^[A-Z0-9_]{2,40}$/.test(rawCode) ? rawCode : 'UNKNOWN';
+  const advice = {
+    ENOTFOUND: 'Database hostname cannot be resolved from the scanner. Use an address reachable from this service.',
+    EAI_AGAIN: 'Database hostname lookup failed. Check the scanner network and database address.',
+    ECONNREFUSED: 'Database connection refused. Check the reachable host, exposed port and database availability.',
+    ETIMEDOUT: 'Database connection timed out. Check network access and firewall rules.',
+    ECONNRESET: 'Database connection was reset. Check network access and database availability.',
+    '28P01': 'Database authentication failed. Check the application database username and password.',
+    '3D000': 'Application database does not exist at this address. Check the database name.',
+    '42P01': 'Flip tables are missing in the connected database. Use FutBot’s application database and run its migrations.',
+    '42501': 'Database permission denied. The scanner needs access to flip destinations and permission to insert calls.',
+    '57014': 'Application database query timed out. Check database load and connectivity.'
+  };
+  // Never print raw database errors: they may include credentials, URLs or SQL.
+  return `FutBot queue unavailable [${code}]. ${advice[code] ?? 'Application database connection or query failed. Check the service connection and migrations.'}`;
+}
+
 export async function deliverToBotQueue(state, appPool, now = Date.now()) {
   state.pendingPosts ??= [];
   state.postedKeys ??= [];
@@ -451,9 +470,9 @@ export async function deliverToBotQueue(state, appPool, now = Date.now()) {
       state.postedKeys = [...state.postedKeys, post.key].slice(-500);
     }
     return {enabled: true, mode: 'bot_queue', queued, channels: Number(destinations.rows[0]?.n ?? 0), posted: 0, pending: state.pendingPosts.length, error: null};
-  } catch {
+  } catch (error) {
     return {enabled: true, mode: 'bot_queue', queued, posted: 0, pending: state.pendingPosts.length,
-      error: 'FutBot queue unavailable. Check APP_DATABASE_URL and run the bot migrations.'};
+      error: botQueueProblem(error)};
   }
 }
 
