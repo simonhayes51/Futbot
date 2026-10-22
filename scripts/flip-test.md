@@ -30,6 +30,8 @@ Discord posting is off unless both of these Railway variables are set:
 The target must have an explicit `@everyone` deny for **View Channel**. FutBot
 also needs View Channel, Send Messages and Embed Links there. The scanner refuses
 to post if the target is public or is not a server text/announcement channel.
+Each run verifies the configured private channel and reports the result, even
+when there are no live calls to send.
 It posts only newly generated live `signals`; historical replay examples and
 diagnostic runs are never posted. Pending sends are retried, and Discord nonces
 prevent duplicate messages if Railway restarts during a send. Keep the scanner's
