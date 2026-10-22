@@ -134,12 +134,21 @@ contains seven days of bounded history and calls, under `<FLIP_TEST_DIR>/<year>-
 Check `historyLoaded`, `historyRefreshed`, `historyCoverage`, `paused`, `pauseReason`, `market`, rejection `reasons`,
 `signals`, `outcomes` and `historicalPulls`. `signals` are live-only candidates
 that satisfy every current rule. `historicalPulls` replays prior hourly BIN dips
-against the preceding 24-hour median and reports whether the target was observed
-twice in the following 12 hours. It is a retrospective diagnostic, separate from
-live calls; it uses later observations to score an earlier entry and does not
-prove an executable listing or completed sale. Reasons are calculated even when
-market checks pause live signals, so missing history and weak patterns can be
-diagnosed immediately.
+against the preceding 24-hour median and checks target recovery over 12, 24 and
+48 hours. The 12-hour window is the original short-term benchmark; 24/48-hour
+results show later recoveries separately, so a slow recovery is not labelled a
+failure at every horizon. A result is counted only when that whole window has
+enough observations. It is a retrospective diagnostic, separate from live calls;
+it uses later observations to score an earlier entry and does not prove an
+executable listing or completed sale. Reasons are calculated even when market
+checks pause live signals, so missing history and weak patterns can be diagnosed
+immediately.
+
+The report includes outcome rates by dip depth and prior-day market trend. It
+labels a sample under 50 resolved setups as still collecting evidence. This
+scorecard does not automatically change live rules: BIN target observations are
+not completed sales, and changing thresholds on a small or biased sample could
+make calls less reliable.
 Calls expire after 12 hours. `target_observed` requires two later fresh readings at
 or above the target, at least ten minutes apart, before expiry. It is **not** a
 completed sale or realised profit. Missing/stale data cannot prove trade failure;
