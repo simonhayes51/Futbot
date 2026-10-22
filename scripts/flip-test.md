@@ -129,8 +129,14 @@ original quote age: fix that upstream rather than treating repeated prices as pr
 Each run prints JSON to private service logs and replaces `latest.json`. `state.json`
 contains seven days of bounded history and calls, under `<FLIP_TEST_DIR>/<year>-<platform>`.
 Check `historyLoaded`, `historyRefreshed`, `historyCoverage`, `paused`, `pauseReason`, `market`, rejection `reasons`,
-`signals` and `outcomes`. Reasons are calculated even when market checks pause
-signals, so missing history and weak patterns can be diagnosed immediately.
+`signals`, `outcomes` and `historicalPulls`. `signals` are live-only candidates
+that satisfy every current rule. `historicalPulls` replays prior hourly BIN dips
+against the preceding 24-hour median and reports whether the target was observed
+twice in the following 12 hours. It is a retrospective diagnostic, separate from
+live calls; it uses later observations to score an earlier entry and does not
+prove an executable listing or completed sale. Reasons are calculated even when
+market checks pause live signals, so missing history and weak patterns can be
+diagnosed immediately.
 Calls expire after 12 hours. `target_observed` requires two later fresh readings at
 or above the target, at least ten minutes apart, before expiry. It is **not** a
 completed sale or realised profit. Missing/stale data cannot prove trade failure;

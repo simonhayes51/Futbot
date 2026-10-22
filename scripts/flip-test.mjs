@@ -183,6 +183,47 @@ export function evaluate(card, now) {
     historyQuality: partialDays ? 'one_partial_day' : 'complete', observedHours: hours, totalObservedHours: total};
 }
 
+// Retrospective check: look for earlier BIN entries that had enough room to
+// clear EA tax, then record whether the target was later observed. This is
+// deliberately reported separately from live signals; it uses future history
+// to score a past entry and must never be presented as a current buy call.
+export function replayHistoricalPulls(card, now, limit = 5) {
+  const h = hourly(card, now).filter(p => p.at >= now - 7 * DAY && Number.isFinite(p.price) && p.price > 0);
+  const setups = [];
+  const lastObservedAt = h.at(-1)?.at ?? 0;
+  let blockedUntil = -Infinity;
+  for (let i = 12; i < h.length - 1; i++) {
+    const dip = h[i];
+    // Do not grade an incomplete 12-hour outcome window as a failed setup.
+    if (dip.at + 12 * HOUR > lastObservedAt) continue;
+    if (dip.at <= blockedUntil) continue;
+    const baselineRows = h.filter(p => p.at >= dip.at - DAY && p.at < dip.at);
+    if (baselineRows.length < 12) continue;
+    const baseline = median(baselineRows.map(p => p.price));
+    const target = Math.floor(baseline * 0.98 / 100) * 100;
+    const entry = dip.price;
+    const net = Math.floor(target * 0.95) - entry;
+    if (entry > baseline * 0.90 || net < 1500 || net / entry < 0.05) continue;
+
+    const future = h.slice(i + 1).filter(p => p.at <= dip.at + 12 * HOUR);
+    const recovery = future.filter(p => p.price >= target);
+    const reached = recovery.length >= 2 && recovery[1].at - recovery[0].at >= HOUR;
+    const recoveredAt = reached ? recovery[1].at : null;
+    setups.push({id: String(card.id ?? ''), name: card.name ?? null,
+      rating: Number.isFinite(card.rating) ? card.rating : null, entryAt: new Date(dip.at).toISOString(),
+      entryBin: entry, baselineBin: Math.round(baseline), targetBin: target,
+      estimatedNetAfterTax: net, estimatedMargin: net / entry,
+      outcome: reached ? 'target_observed' : 'target_not_observed_within_12h',
+      targetObservedAt: recoveredAt === null ? null : new Date(recoveredAt).toISOString()});
+    // Treat one fall and its recovery (or 12-hour observation window) as one setup.
+    blockedUntil = recoveredAt ?? dip.at + 12 * HOUR;
+  }
+  const ranked = setups.sort((a, b) => Number(b.outcome === 'target_observed') - Number(a.outcome === 'target_observed') ||
+    b.estimatedNetAfterTax - a.estimatedNetAfterTax);
+  return {count: setups.length, targetObserved: setups.filter(s => s.outcome === 'target_observed').length,
+    examples: ranked.slice(0, limit)};
+}
+
 export function scan(state, rows, now = Date.now()) {
   const cards = ingest(state, rows, now);
   const market = marketCheck(cards, now);
@@ -213,12 +254,19 @@ export function scan(state, rows, now = Date.now()) {
   }
   state.calls = state.calls.filter(c => c.createdAt >= now - 7 * DAY);
   const coverageChecks = cards.map(c => historyCoverage(c, now));
+  const historicalPulls = cards.map(c => replayHistoricalPulls(c, now, 2));
+  const historicalExamples = historicalPulls.flatMap(c => c.examples)
+    .sort((a, b) => Number(b.outcome === 'target_observed') - Number(a.outcome === 'target_observed') ||
+      b.estimatedNetAfterTax - a.estimatedNetAfterTax).slice(0, 10);
   return {at: new Date(now).toISOString(), mode: 'private_bin_test', tracked: state.ids.length, fresh: cards.length,
     historyCoverage: {usableCards: coverageChecks.filter(c => c.usable).length,
       usableWithPartialDay: coverageChecks.filter(c => c.usable && c.partialDays === 1).length,
       medianHoursByDay: [0, 1, 2].map(i => median(coverageChecks.map(c => c.hours[i])))},
     paused, pauseReason: !coverage ? 'insufficient_fresh_coverage' : !market.covered ? 'market_history_warming_up' :
       now < state.pauseUntil ? 'market_drop_cooldown' : null, market, reasons, signals, outcomes,
+    historicalPulls: {setups: historicalPulls.reduce((n, c) => n + c.count, 0),
+      targetObserved: historicalPulls.reduce((n, c) => n + c.targetObserved, 0), examples: historicalExamples,
+      disclaimer: 'Retrospective BIN replay only. These are past setups scored using later observations, not live buy calls or completed sales.'},
     disclaimer: 'BIN observations only; target observed does not mean a completed sale or realised profit.'};
 }
 
