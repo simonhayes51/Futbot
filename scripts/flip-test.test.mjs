@@ -29,21 +29,41 @@ test('historical replay surfaces past qualifying entries separately from live ca
   assert.ok(replay.targetObserved > 0);
   assert.ok(replay.examples.every(s => s.entryBin < s.baselineBin && s.estimatedNetAfterTax > 0));
   assert.ok(replay.examples.some(s => s.outcome === 'target_observed'));
+  assert.ok(replay.examples.every(s => s.horizons['12h']));
   const recentOnly = {...c, history: c.history.filter(p => p.at >= now - 12 * H)};
   assert.equal(replayHistoricalPulls(recentOnly, now).count, 0);
+});
+test('historical replay distinguishes late recovery from a failed 12-hour setup', () => {
+  const c = {id: 'late-recovery', name: 'Late Card', rating: 87, rarity: 'Special', history: []};
+  c.history = Array.from({length: 120}, (_, i) => ({at: now - (120 - i) * H,
+    values: [i >= 30 && i < 45 ? 80_000 : 100_000]}));
+  const setup = replayHistoricalPulls(c, now).examples.find(s => s.entryBin === 80_000);
+  assert.ok(setup);
+  assert.equal(setup.horizons['12h'].status, 'not_observed');
+  assert.equal(setup.horizons['24h'].status, 'target_observed');
+  assert.equal(setup.horizons['48h'].status, 'target_observed');
+  assert.equal(setup.outcome, 'target_not_observed_within_12h');
 });
 test('human report formats historical trades and keeps live calls clearly separate', () => {
   const output = formatReport({at: '2026-10-22T18:07:24.774Z', year: 27, platform: 'ps5',
     fresh: 300, tracked: 300, historyCoverage: {usableCards: 291}, paused: false,
     market: {covered: true, medianChange: -0.0031, fallingShare: 0.14}, signals: [], reasons: {},
-    historicalPulls: {setups: 106, targetObserved: 29, examples: [{id: '67338422', name: 'Dayot Upamecano',
+    historicalPulls: {setups: 106, targetObserved: 29,
+      horizons: {'12h': {resolved: 106, targetObserved: 29, hitRate: 29 / 106},
+        '24h': {resolved: 80, targetObserved: 40, hitRate: 0.5}, '48h': {resolved: 50, targetObserved: 45, hitRate: 0.9}},
+      byDipDepth: {'15–25% dip': {horizons: {'24h': {resolved: 40, targetObserved: 30, hitRate: 0.75}}}},
+      learning: {resolved12h: 106, sampleForCalibration: 50, status: 'review_threshold_met'},
+      examples: [{id: '67338422', name: 'Dayot Upamecano',
       rating: 89, rarity: 'Destined for Glory · Pristine Holographic', entryAt: '2026-10-22T00:00:00.000Z',
       entryBin: 2400000, targetBin: 2744000, estimatedNetAfterTax: 206800, estimatedMargin: 0.086,
       outcome: 'target_observed', targetObservedAt: '2026-10-22T09:00:00.000Z'}]}});
   assert.match(output, /Historical setups: 106 · target observed 29/);
+  assert.match(output, /Recovery by horizon: 12h 29\/106/);
+  assert.match(output, /By dip depth: 15–25% dip: 30\/40 24h/);
+  assert.match(output, /Learning sample: 106\/50 resolved setups/);
   assert.match(output, /Dayot Upamecano \(89 · Destined for Glory · Pristine Holographic\)/);
   assert.match(output, /buy 2,400,000 coins → target 2,744,000 coins/);
-  assert.match(output, /TARGET OBSERVED at 09:00 UTC/);
+  assert.match(output, /TARGET OBSERVED by 12h at 09:00 UTC/);
   assert.match(output, /Live buy calls: 0/);
   assert.doesNotMatch(output, /LIVE BUY CALL/);
 });
