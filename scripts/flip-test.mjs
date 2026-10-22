@@ -412,10 +412,10 @@ export async function deliverPendingPosts(state, {channelId, token, year = state
   state.pendingPosts ??= [];
   state.postedKeys ??= [];
   if (!channelId) return {enabled: false, posted: 0, pending: state.pendingPosts.length, error: null};
-  if (!token) return {enabled: true, posted: 0, pending: state.pendingPosts.length, error: 'DISCORD_TOKEN is missing.'};
-  if (!state.pendingPosts.length) return {enabled: true, posted: 0, pending: 0, error: null};
+  if (!token) return {enabled: true, channelVerified: false, posted: 0, pending: state.pendingPosts.length, error: 'DISCORD_TOKEN is missing.'};
   try {await validatePrivateChannel(channelId, token, fetchImpl);}
-  catch (error) {return {enabled: true, posted: 0, pending: state.pendingPosts.length, error: error.message};}
+  catch (error) {return {enabled: true, channelVerified: false, posted: 0, pending: state.pendingPosts.length, error: error.message};}
+  if (!state.pendingPosts.length) return {enabled: true, channelVerified: true, posted: 0, pending: 0, error: null};
   let posted = 0, error = null;
   for (const post of [...state.pendingPosts]) {
     post.attempts = (post.attempts ?? 0) + 1;
@@ -427,7 +427,7 @@ export async function deliverPendingPosts(state, {channelId, token, year = state
       posted++;
     } catch (failure) {error = failure.message; break;}
   }
-  return {enabled: true, posted, pending: state.pendingPosts.length, error};
+  return {enabled: true, channelVerified: true, posted, pending: state.pendingPosts.length, error};
 }
 
 // Human-readable Railway output; latest.json remains structured for analysis.
@@ -443,7 +443,7 @@ export function formatReport(report) {
     `Live buy calls: ${report.signals?.length ?? 0}${report.paused ? ` · paused (${report.pauseReason ?? 'market safety check'})` : ''}`
   ];
   if (report.discordPosting?.enabled) {
-    lines.push(`Discord posts: ${report.discordPosting.posted} sent · ${report.discordPosting.pending} pending${report.discordPosting.error ? ` · ${report.discordPosting.error}` : ''}`);
+    lines.push(`Discord posts: ${report.discordPosting.channelVerified ? 'private channel verified' : 'channel not verified'} · ${report.discordPosting.posted} sent · ${report.discordPosting.pending} pending${report.discordPosting.error ? ` · ${report.discordPosting.error}` : ''}`);
   } else lines.push('Discord posts: off · set FLIP_TEST_DISCORD_CHANNEL_ID to enable');
   for (const signal of report.signals ?? []) {
     lines.push(`  BUY CHECK · ${cardLabel(signal)} · entry ${coins(signal.entry)} → target ${coins(signal.target)} · est. net +${coins(signal.net)} · ${signal.episodes} recoveries`);

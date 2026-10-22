@@ -96,7 +96,7 @@ test('Discord publisher deduplicates calls and refuses a channel visible to ever
       {status: 200, headers: {'Content-Type': 'application/json'}});
   };
   const delivered = await deliverPendingPosts(state, {channelId: channel.id, token: 'test-token', fetchImpl});
-  assert.deepEqual(delivered, {enabled: true, posted: 1, pending: 0, error: null});
+  assert.deepEqual(delivered, {enabled: true, channelVerified: true, posted: 1, pending: 0, error: null});
   assert.equal(sentPayload.enforce_nonce, true);
   assert.equal(queueSignalPosts(state, [signal], '2026-10-22T18:00:00.000Z'), 0);
 
@@ -105,8 +105,13 @@ test('Discord publisher deduplicates calls and refuses a channel visible to ever
     fetchImpl: async () => new Response(JSON.stringify({...channel, permission_overwrites: []}),
       {status: 200, headers: {'Content-Type': 'application/json'}})});
   assert.equal(blocked.posted, 0);
+  assert.equal(blocked.channelVerified, false);
   assert.equal(blocked.pending, 1);
   assert.match(blocked.error, /not private/);
+  const verifiedWithoutSignal = await deliverPendingPosts(emptyState(), {channelId: channel.id,
+    token: 'test-token', fetchImpl: async () => new Response(JSON.stringify(channel),
+      {status: 200, headers: {'Content-Type': 'application/json'}})});
+  assert.deepEqual(verifiedWithoutSignal, {enabled: true, channelVerified: true, posted: 0, pending: 0, error: null});
 });
 test('rejects falling trends, thin history, unstable prices and stale confirmations', () => {
   const c = card();
