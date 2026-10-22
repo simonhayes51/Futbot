@@ -209,7 +209,7 @@ export function replayHistoricalPulls(card, now, limit = 5) {
     const recovery = future.filter(p => p.price >= target);
     const reached = recovery.length >= 2 && recovery[1].at - recovery[0].at >= HOUR;
     const recoveredAt = reached ? recovery[1].at : null;
-    setups.push({id: String(card.id ?? ''), name: card.name ?? null,
+    setups.push({id: String(card.id ?? ''), name: card.name ?? null, rarity: card.rarity ?? null,
       rating: Number.isFinite(card.rating) ? card.rating : null, entryAt: new Date(dip.at).toISOString(),
       entryBin: entry, baselineBin: Math.round(baseline), targetBin: target,
       estimatedNetAfterTax: net, estimatedMargin: net / entry,
@@ -258,7 +258,8 @@ export function scan(state, rows, now = Date.now()) {
   const historicalExamples = historicalPulls.flatMap(c => c.examples)
     .sort((a, b) => Number(b.outcome === 'target_observed') - Number(a.outcome === 'target_observed') ||
       b.estimatedNetAfterTax - a.estimatedNetAfterTax).slice(0, 10);
-  return {at: new Date(now).toISOString(), mode: 'private_bin_test', tracked: state.ids.length, fresh: cards.length,
+  return {at: new Date(now).toISOString(), mode: 'private_bin_test', year: state.year, platform: state.platform,
+    tracked: state.ids.length, fresh: cards.length,
     historyCoverage: {usableCards: coverageChecks.filter(c => c.usable).length,
       usableWithPartialDay: coverageChecks.filter(c => c.usable && c.partialDays === 1).length,
       medianHoursByDay: [0, 1, 2].map(i => median(coverageChecks.map(c => c.hours[i])))},
@@ -268,6 +269,52 @@ export function scan(state, rows, now = Date.now()) {
       targetObserved: historicalPulls.reduce((n, c) => n + c.targetObserved, 0), examples: historicalExamples,
       disclaimer: 'Retrospective BIN replay only. These are past setups scored using later observations, not live buy calls or completed sales.'},
     disclaimer: 'BIN observations only; target observed does not mean a completed sale or realised profit.'};
+}
+
+const hasNumber = value => value !== null && value !== undefined && value !== '' && Number.isFinite(Number(value));
+const coins = value => hasNumber(value) ? `${Math.round(Number(value)).toLocaleString('en-GB')} coins` : 'n/a';
+const percent = value => hasNumber(value) ? `${(Number(value) * 100).toFixed(1)}%` : 'n/a';
+function cardLabel(card) {
+  const name = usableName(card.name) ?? `Unknown card ${card.id}`;
+  const details = [Number.isInteger(card.rating) && card.rating > 0 ? card.rating : null, card.rarity]
+    .filter(Boolean).join(' · ');
+  return details ? `${name} (${details})` : name;
+}
+
+// Human-readable Railway output; latest.json remains structured for analysis.
+export function formatReport(report) {
+  const at = new Date(report.at);
+  const stamp = Number.isNaN(at.getTime()) ? report.at : `${at.toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+  const market = report.market ?? {};
+  const historical = report.historicalPulls ?? {};
+  const lines = [
+    `FLIP TEST · FC${report.year ?? 27} · ${(report.platform ?? 'ps5').toUpperCase()} · ${stamp}`,
+    `Coverage: ${report.fresh ?? 0}/${report.tracked ?? 0} fresh · ${report.historyCoverage?.usableCards ?? 0} cards with usable history`,
+    `Market: ${market.covered ? 'covered' : 'warming up'} · median ${percent(market.medianChange)} · falling ${percent(market.fallingShare)}${market.crash ? ' · CRASH PAUSE' : ''}`,
+    `Live buy calls: ${report.signals?.length ?? 0}${report.paused ? ` · paused (${report.pauseReason ?? 'market safety check'})` : ''}`
+  ];
+  for (const signal of report.signals ?? []) {
+    lines.push(`  BUY CHECK · ${cardLabel(signal)} · entry ${coins(signal.entry)} → target ${coins(signal.target)} · est. net +${coins(signal.net)} · ${signal.episodes} recoveries`);
+  }
+  if (!(report.signals ?? []).length) lines.push('  None this scan.');
+
+  lines.push(`Historical setups: ${historical.setups ?? 0} · target observed ${historical.targetObserved ?? 0}`);
+  for (const setup of historical.examples ?? []) {
+    const observed = setup.outcome === 'target_observed';
+    const outcome = observed
+      ? `TARGET OBSERVED${setup.targetObservedAt ? ` at ${setup.targetObservedAt.slice(11, 16)} UTC` : ''}`
+      : 'not confirmed within 12h';
+    lines.push(`  ${observed ? '✓' : '·'} ${cardLabel(setup)} [${setup.id}] · ${setup.entryAt?.slice(0, 16).replace('T', ' ')} UTC · buy ${coins(setup.entryBin)} → target ${coins(setup.targetBin)} · est. net +${coins(setup.estimatedNetAfterTax)} (${percent(setup.estimatedMargin)}) · ${outcome}`);
+  }
+  if (!(historical.examples ?? []).length) lines.push('  No qualifying past setups in the replay window.');
+  if (Object.keys(report.reasons ?? {}).length) {
+    lines.push(`Candidate checks: ${Object.entries(report.reasons).map(([reason, count]) => `${reason.replaceAll('_', ' ')} ${count}`).join(' · ')}`);
+  }
+  if (report.historyLoaded?.cards || report.historyRefreshed?.cards) {
+    lines.push(`History work: seeded ${report.historyLoaded?.cards ?? 0} cards/${report.historyLoaded?.rows ?? 0} rows · refreshed ${report.historyRefreshed?.cards ?? 0} cards/${report.historyRefreshed?.rows ?? 0} rows`);
+  }
+  lines.push('Historical results are BIN observations, not completed sales.');
+  return lines.join('\n');
 }
 
 
@@ -437,7 +484,7 @@ async function main() {
       // State includes signals/outcomes for seven days, avoiding an unbounded log.
       await atomicJSON(file, state);
       await atomicJSON(resolve(directory, 'latest.json'), report);
-      console.log(`Flip test report: ${JSON.stringify(report)}`);
+      console.log(formatReport(report));
     };
     await tick();
     if (!process.argv.includes('--once') && !process.argv.includes('--diagnose-history')) {
