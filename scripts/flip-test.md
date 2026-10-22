@@ -129,7 +129,8 @@ original quote age: fix that upstream rather than treating repeated prices as pr
 Each run prints a readable trade summary to private service logs and replaces `latest.json`
 with the full structured report. The log shows live buy checks separately from
 retrospective setups, with card name/version, entry, target, estimated net and
-whether the target was later observed. `state.json`
+whether the target was later observed, with successful and missed examples shown
+separately. `state.json`
 contains seven days of bounded history and calls, under `<FLIP_TEST_DIR>/<year>-<platform>`.
 Check `historyLoaded`, `historyRefreshed`, `historyCoverage`, `paused`, `pauseReason`, `market`, rejection `reasons`,
 `signals`, `outcomes` and `historicalPulls`. `signals` are live-only candidates
