@@ -2,7 +2,7 @@
 
 Runs separately from the bot. It can optionally post live, rule-qualified calls
 to one explicitly configured private Discord channel. It has no public commands,
-AI, browser, sales-price dependency, database writes or schema migration. Uses the existing
+AI, browser, sales-price dependency or writes to the price database. Uses the existing
 `PRICE_DATABASE_URL` data and the repository's `pg` dependency. Node 22+.
 
 ## Run
@@ -20,9 +20,29 @@ Alternatively schedule `--once` every 15 minutes, using the SAME persistent dire
 Use one service/process only. Existing bot startup is not changed.
 
 Required: `PRICE_DATABASE_URL`. Existing `GAME_YEAR` (default 27) and `PLATFORM`
-(default ps5, or pc) are reused. No APP database is needed.
+(default ps5, or pc) are reused. APP_DATABASE_URL is optional for log-only runs.
 
-Discord posting is off unless both of these Railway variables are set:
+Set the private channel from Discord with **Manage Server** permission:
+
+```text
+/autoflips set channel:#private-flips platform:PS5 / Xbox
+/autoflips status
+/autoflips off platform:PS5 / Xbox
+```
+
+The scanner service needs `APP_DATABASE_URL` referencing the same application
+database as FutBot. This is a one-time connection between the separate services.
+Deploy the bot first so its normal migration creates the flip configuration and
+delivery tables. FutBot uses its existing token to send calls; the scanner does
+not need a Discord token or channel environment variable in this mode. The price
+database remains read-only. New live signals enter a deduplicated application
+outbox; FutBot rechecks the current buy BIN, freshness, channel privacy and posting
+permissions before sending. Disabling a destination cancels pending calls for it.
+The scanner logs configured channel counts and calls queued for FutBot.
+Changing channels in Discord takes effect on the next scan.
+
+Alternatively, direct scanner posting is available when `APP_DATABASE_URL` is
+absent and both of these Railway variables are set:
 
 - `DISCORD_TOKEN`: FutBot's existing bot token.
 - `FLIP_TEST_DISCORD_CHANNEL_ID`: ID of the private server text channel.

@@ -1,8 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls, enrichCardMetadata, formatReport, privateChannelProblem, tradePostPayload, queueSignalPosts, deliverPendingPosts} from './flip-test.mjs';
+import {readFile} from 'node:fs/promises';
+import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls, enrichCardMetadata, formatReport, privateChannelProblem, tradePostPayload, queueSignalPosts, deliverPendingPosts, deliverToBotQueue} from './flip-test.mjs';
 
 const H = 3_600_000, now = Date.UTC(2026, 9, 19, 12);
+test('scanner queues live signals only for enabled slash-command destinations, without duplicates', async () => {
+  const {PGlite} = await import('@electric-sql/pglite');
+  const db = new PGlite();
+  try {
+    await db.exec(await readFile(new URL('../sql/009-auto-flips.sql', import.meta.url), 'utf8'));
+    await db.exec("INSERT INTO futbot_flip_channels(guild_id,platform,channel_id,set_by,enabled) VALUES('one','ps5','private-one','admin',true),('two','ps5','private-two','admin',false),('pc','pc','private-pc','admin',true)");
+    const pool = {query: async (...args) => {const r = await db.query(...args); return {...r, rowCount: r.affectedRows};}};
+    const state = emptyState();
+    const signal = {id: '123', reason: 'candidate', sourceAt: now - 60_000};
+    queueSignalPosts(state, [signal], new Date(now).toISOString());
+    const result = await deliverToBotQueue(state, pool, now);
+    assert.equal(result.queued, 1); assert.equal(result.channels, 1);
+    assert.equal((await db.query('SELECT guild_id FROM futbot_flip_outbox')).rows[0].guild_id, 'one');
+    state.postedKeys = []; queueSignalPosts(state, [signal], new Date(now).toISOString());
+    await deliverToBotQueue(state, pool, now);
+    assert.equal((await db.query('SELECT * FROM futbot_flip_outbox')).rows.length, 1);
+    queueSignalPosts(state, [{id: '456', reason: 'historical', sourceAt: now}], new Date(now).toISOString());
+    await deliverToBotQueue(state, pool, now);
+    assert.equal((await db.query('SELECT * FROM futbot_flip_outbox')).rows.length, 1);
+  } finally {await db.close();}
+});
 function card() {
   return {name: 'Example', rating: 87, rarity: 'Gold', at: now - 60_000, price: 92_000,
     lastAlert: 0, recent: [31, 16, 1].map(m => ({at: now - m * 60_000, price: 92_000})),

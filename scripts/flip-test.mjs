@@ -430,6 +430,33 @@ export async function deliverPendingPosts(state, {channelId, token, year = state
   return {enabled: true, channelVerified: true, posted, pending: state.pendingPosts.length, error};
 }
 
+// Shared application DB hands new live calls to the existing FutBot process.
+// The price database remains read-only; no Discord token is needed in this mode.
+export async function deliverToBotQueue(state, appPool, now = Date.now()) {
+  state.pendingPosts ??= [];
+  state.postedKeys ??= [];
+  let queued = 0;
+  try {
+    const destinations = await appPool.query('SELECT count(*)::int AS n FROM futbot_flip_channels WHERE platform=$1 AND enabled', [state.platform]);
+    for (const post of [...state.pendingPosts]) {
+      const s = post.signal, source = new Date(s.sourceAt);
+      if (s.reason !== 'candidate' || !Number.isFinite(source.getTime()) || source.getTime() > now || now - source.getTime() > 30 * 60_000) {
+        state.pendingPosts = state.pendingPosts.filter(item => item.key !== post.key); continue;
+      }
+      const result = await appPool.query(`INSERT INTO futbot_flip_outbox(signal_key,guild_id,channel_id,game_year,platform,signal,source_at)
+        SELECT $1,guild_id,channel_id,$2,$3,$4::jsonb,$5 FROM futbot_flip_channels WHERE platform=$3 AND enabled
+        ON CONFLICT(signal_key,guild_id) DO NOTHING`, [post.key, state.year, state.platform, JSON.stringify(s), source]);
+      queued += result.rowCount ?? 0;
+      state.pendingPosts = state.pendingPosts.filter(item => item.key !== post.key);
+      state.postedKeys = [...state.postedKeys, post.key].slice(-500);
+    }
+    return {enabled: true, mode: 'bot_queue', queued, channels: Number(destinations.rows[0]?.n ?? 0), posted: 0, pending: state.pendingPosts.length, error: null};
+  } catch {
+    return {enabled: true, mode: 'bot_queue', queued, posted: 0, pending: state.pendingPosts.length,
+      error: 'FutBot queue unavailable. Check APP_DATABASE_URL and run the bot migrations.'};
+  }
+}
+
 // Human-readable Railway output; latest.json remains structured for analysis.
 export function formatReport(report) {
   const at = new Date(report.at);
@@ -442,9 +469,11 @@ export function formatReport(report) {
     `Market: ${market.covered ? 'covered' : 'warming up'} · median ${percent(market.medianChange)} · falling ${percent(market.fallingShare)}${market.crash ? ' · CRASH PAUSE' : ''}`,
     `Live buy calls: ${report.signals?.length ?? 0}${report.paused ? ` · paused (${report.pauseReason ?? 'market safety check'})` : ''}`
   ];
-  if (report.discordPosting?.enabled) {
+  if (report.discordPosting?.mode === 'bot_queue') {
+    lines.push(`FutBot delivery: ${report.discordPosting.channels ?? '?'} configured channels · ${report.discordPosting.queued} queued · ${report.discordPosting.pending} pending${report.discordPosting.error ? ` · ${report.discordPosting.error}` : ''}`);
+  } else if (report.discordPosting?.enabled) {
     lines.push(`Discord posts: ${report.discordPosting.channelVerified ? 'private channel verified' : 'channel not verified'} · ${report.discordPosting.posted} sent · ${report.discordPosting.pending} pending${report.discordPosting.error ? ` · ${report.discordPosting.error}` : ''}`);
-  } else lines.push('Discord posts: off · set FLIP_TEST_DISCORD_CHANNEL_ID to enable');
+  } else lines.push('FutBot delivery: off · connect APP_DATABASE_URL, then use /autoflips set');
   for (const signal of report.signals ?? []) {
     lines.push(`  BUY CHECK · ${cardLabel(signal)} · entry ${coins(signal.entry)} → target ${coins(signal.target)} · est. net +${coins(signal.net)} · ${signal.episodes} recoveries`);
   }
@@ -589,7 +618,7 @@ async function main() {
   const cap = Number(process.env.FLIP_TEST_MAX_CARDS ?? 300);
   const discordChannelId = process.env.FLIP_TEST_DISCORD_CHANNEL_ID?.trim() ?? '';
   const discordToken = process.env.DISCORD_TOKEN?.trim() ?? '';
-  if (discordChannelId && !discordToken) throw new Error('Set DISCORD_TOKEN when FLIP_TEST_DISCORD_CHANNEL_ID is configured.');
+  if (discordChannelId && !discordToken && !process.env.APP_DATABASE_URL) throw new Error('Set DISCORD_TOKEN when FLIP_TEST_DISCORD_CHANNEL_ID is configured.');
   if (!Number.isInteger(year) || year < 20 || !Number.isInteger(cap) || cap < 20 || cap > 1000)
     throw new Error('Use a valid GAME_YEAR and FLIP_TEST_MAX_CARDS from 20 to 1000');
   const sql = snapshotSQL(platform);
@@ -603,7 +632,7 @@ async function main() {
   // One process per state directory; a crashed process can leave a lock. See docs.
   const lockPath = resolve(directory, 'scanner.lock');
   const lock = await open(lockPath, 'wx');
-  let pool;
+  let pool, appPool;
   try {
     await lock.writeFile(String(process.pid));
     const file = resolve(directory, 'state.json');
@@ -616,6 +645,12 @@ async function main() {
     state.postedKeys ??= [];
     if (!process.env.PRICE_DATABASE_URL) throw new Error('PRICE_DATABASE_URL is required');
     const {default: pg} = await import('pg');
+    if (process.env.APP_DATABASE_URL) {
+      if (process.env.APP_DATABASE_URL === process.env.PRICE_DATABASE_URL) throw new Error('APP_DATABASE_URL must be the separate FutBot application database.');
+      appPool = new pg.Pool({connectionString: process.env.APP_DATABASE_URL, max: 1, statement_timeout: 8000,
+        connectionTimeoutMillis: 10000, idleTimeoutMillis: 1000, application_name: 'futbot-flip-outbox'});
+      appPool.on('error', () => console.error('Flip test: application database connection error'));
+    }
     pool = new pg.Pool({connectionString: process.env.PRICE_DATABASE_URL, max: 1,
       statement_timeout: 8000, connectionTimeoutMillis: 10000, idleTimeoutMillis: 1000,
       options: '-c default_transaction_read_only=on', application_name: 'futbot-private-flip-test'});
@@ -663,14 +698,15 @@ async function main() {
       }
       const report = process.argv.includes('--diagnose-history')
         ? diagnoseHistory(state, rows, Date.now()) : scan(state, rows, Date.now());
-      if (discordChannelId && report.mode === 'private_bin_test')
+      if ((appPool || discordChannelId) && report.mode === 'private_bin_test')
         queueSignalPosts(state, report.signals, report.at, year, platform);
       // Save the durable queue before contacting Discord. Discord's enforced nonce
       // makes retries safe if the process exits after a send but before this save.
       await atomicJSON(file, state);
       report.discordPosting = process.argv.includes('--diagnose-history')
         ? {enabled: Boolean(discordChannelId), posted: 0, pending: state.pendingPosts.length, error: 'Diagnostic mode never posts.'}
-        : await deliverPendingPosts(state, {channelId: discordChannelId, token: discordToken, year, platform});
+        : appPool ? await deliverToBotQueue(state, appPool)
+          : await deliverPendingPosts(state, {channelId: discordChannelId, token: discordToken, year, platform});
       report.historyLoaded = {cards: unseeded.length, rows: historyRows};
       report.historyRefreshed = {cards: catchup.length, rows: refreshedRows, hours: catchup.length ? catchupHours : 0};
       state.lastScanAt = Date.now();
@@ -692,7 +728,7 @@ async function main() {
       }
       process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop);
     }
-  } finally {await pool?.end(); await lock.close(); await unlink(lockPath);}
+  } finally {await Promise.all([pool?.end(), appPool?.end()]); await lock.close(); await unlink(lockPath);}
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main().catch(error => {
