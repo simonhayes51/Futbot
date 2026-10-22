@@ -310,16 +310,47 @@ export function diagnoseHistory(state, rows, now = Date.now()) {
 export function snapshotSQL(platform) {
   const table = historyTable(platform);
   return `SELECT p.source_card_id::text AS id, COALESCE(p.display_name,p.name,p.full_name) AS name,
-    p.rating,p.rarity,l.lowest_bin AS price,l.captured_at AS at
+    p.rating,p.rarity,base.name AS base_name,l.lowest_bin AS price,l.captured_at AS at
     FROM public.futgg_players p JOIN LATERAL (
       SELECT h.lowest_bin,h.captured_at FROM ${table} h
       WHERE h.source_card_id=p.source_card_id AND h.game_year=$1 AND h.platform=$2
         AND h.lowest_bin>0 AND h.captured_at>=now()-interval '30 minutes' AND h.captured_at<=now()
       ORDER BY h.captured_at DESC,h.id DESC LIMIT 1
-    ) l ON true WHERE p.game_year=$1 AND p.is_active=true
+    ) l ON true LEFT JOIN LATERAL (
+      SELECT COALESCE(s.display_name,s.name,s.full_name) AS name
+      FROM public.futgg_players s
+      WHERE s.game_year=p.game_year AND s.source_player_id=p.source_player_id
+        AND s.source_card_id<>p.source_card_id
+        AND NULLIF(BTRIM(COALESCE(s.display_name,s.name,s.full_name)), '') IS NOT NULL
+      ORDER BY (s.source_card_id=s.source_player_id) DESC,s.rating DESC NULLS LAST
+      LIMIT 1
+    ) base ON true WHERE p.game_year=$1 AND p.is_active=true
     AND ($3::text[] IS NULL OR p.source_card_id::text=ANY($3::text[]))
     AND ($3::text[] IS NOT NULL OR l.lowest_bin>20000 OR p.rating>85)
     ORDER BY md5(p.source_card_id::text) LIMIT $4`;
+}
+
+const usableName = value => {
+  if (typeof value !== 'string') return null;
+  const name = value.trim();
+  return !name || /^(unknown(?:\s+card)?|card\s+#?\d+|\d+)$/i.test(name) ? null : name;
+};
+
+// Enrich the scanner's exact item rows from verified FUT.GG item IDs first,
+// then from the sibling base-player row. This is metadata only; BIN values
+// always come from the exact source_card_id queried above.
+export function enrichCardMetadata(rows, galleryCards = []) {
+  const exact = new Map(galleryCards.map(card => [`${card.year}:${card.id}`, card]));
+  return rows.map(row => {
+    const verified = exact.get(`${row.year ?? 27}:${row.id}`);
+    const name = verified?.name ?? usableName(row.name) ?? usableName(row.base_name) ?? null;
+    const ratingValue = verified?.rating ?? Number(row.rating);
+    const rating = Number.isInteger(ratingValue) && ratingValue >= 1 && ratingValue <= 99 ? ratingValue : null;
+    const finish = verified?.finish === 'pristine' ? 'Pristine Holographic' :
+      verified?.finish === 'holographic' ? 'Holographic' : null;
+    return {...row, name, rating,
+      rarity: verified ? `${verified.rarity}${finish ? ` · ${finish}` : ''}` : row.rarity ?? null};
+  });
 }
 
 async function atomicJSON(file, data) {
@@ -332,6 +363,11 @@ async function main() {
   if (!Number.isInteger(year) || year < 20 || !Number.isInteger(cap) || cap < 20 || cap > 1000)
     throw new Error('Use a valid GAME_YEAR and FLIP_TEST_MAX_CARDS from 20 to 1000');
   const sql = snapshotSQL(platform);
+  let galleryCards = [];
+  try {
+    const catalogue = JSON.parse(await readFile(new URL('../data/gallery-cards.json', import.meta.url), 'utf8'));
+    galleryCards = Array.isArray(catalogue.cards) ? catalogue.cards : [];
+  } catch { /* Optional verified metadata supplement; scanner remains price-only. */ }
   const directory = resolve(process.env.FLIP_TEST_DIR ?? '.flip-test', `${year}-${platform}`);
   await mkdir(directory, {recursive: true});
   // One process per state directory; a crashed process can leave a lock. See docs.
@@ -356,6 +392,7 @@ async function main() {
       const now = Date.now();
       const discover = now - state.selectedAt >= DAY || !state.ids.length;
       let {rows} = await pool.query(sql, [year, platform, discover ? null : state.ids, cap]);
+      rows = enrichCardMetadata(rows.map(row => ({...row, year})), galleryCards);
       if (discover && rows.length >= 20) {
         state.ids = rows.map(r => String(r.id)); state.selectedAt = now;
         const retained = new Set([...state.ids, ...state.calls.filter(c => c.status === 'open').map(c => c.id)]);
@@ -388,7 +425,10 @@ async function main() {
         console.error(`Flip test recent history refreshed: ${Math.min(i + 20, catchup.length)}/${catchup.length} cards`);
       }
       // Backfill can take time: use a fresh snapshot for the first decision.
-      if (unseeded.length || catchup.length) ({rows} = await pool.query(sql, [year, platform, state.ids.length ? state.ids : rows.map(r => String(r.id)), cap]));
+      if (unseeded.length || catchup.length) {
+        ({rows} = await pool.query(sql, [year, platform, state.ids.length ? state.ids : rows.map(r => String(r.id)), cap]));
+        rows = enrichCardMetadata(rows.map(row => ({...row, year})), galleryCards);
+      }
       const report = process.argv.includes('--diagnose-history')
         ? diagnoseHistory(state, rows, Date.now()) : scan(state, rows, Date.now());
       report.historyLoaded = {cards: unseeded.length, rows: historyRows};

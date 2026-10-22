@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls} from './flip-test.mjs';
+import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls, enrichCardMetadata} from './flip-test.mjs';
 
 const H = 3_600_000, now = Date.UTC(2026, 9, 19, 12);
 function card() {
@@ -96,27 +96,47 @@ test('query only permits supported tables and parameterises filters', () => {
   assert.throws(() => historySQL('ps5', '4;DROP TABLE'));
   assert.match(snapshotSQL('pc'), /public\.futbot_pc_bin_history/);
   assert.match(snapshotSQL('ps5'), /l\.lowest_bin>20000 OR p\.rating>85/);
+  assert.match(snapshotSQL('ps5'), /s\.source_player_id=p\.source_player_id/);
+});
+test('holographic metadata uses exact verified item first and base player fallback', () => {
+  const gallery = [{id: '67338422', year: 27, name: 'Dayot Upamecano', rating: 89,
+    rarity: 'Destined for Glory', finish: 'pristine'}];
+  const [known, sibling, placeholder] = enrichCardMetadata([
+    {id: '67338422', year: 27, name: null, base_name: 'Upamecano', rating: 0, rarity: null},
+    {id: '999', year: 27, name: null, base_name: 'Lothar Matthäus', rating: 0, rarity: null},
+    {id: '1000', year: 27, name: 'Unknown', base_name: null, rating: 0, rarity: null}
+  ], gallery);
+  assert.deepEqual([known.name, known.rating, known.rarity],
+    ['Dayot Upamecano', 89, 'Destined for Glory · Pristine Holographic']);
+  assert.deepEqual([sibling.name, sibling.rating], ['Lothar Matthäus', null]);
+  assert.deepEqual([placeholder.name, placeholder.rating], [null, null]);
 });
 test('snapshot SQL selects fresh eligible latest prices and limits subsequent reads to selected IDs', async () => {
   const {PGlite} = await import('@electric-sql/pglite');
   const db = new PGlite();
   try {
-    await db.exec(`CREATE TABLE public.futgg_players(source_card_id bigint,game_year int,
+    await db.exec(`CREATE TABLE public.futgg_players(source_card_id bigint,source_player_id bigint,game_year int,
       display_name text,name text,full_name text,rating int,rarity text,is_active boolean);
       CREATE TABLE public.futgg_bin_history(id serial,source_card_id bigint,game_year int,
       platform text,lowest_bin int,captured_at timestamptz);
       INSERT INTO futgg_players(source_card_id,game_year,name,rating,is_active) VALUES
       (1,27,'Boundary',85,true),(2,27,'Price',84,true),(3,27,'Rating',86,true),
       (4,27,'Inactive',90,false),(5,26,'Old year',90,true),(6,27,'Stale',90,true);
+      UPDATE futgg_players SET source_player_id=source_card_id;
+      INSERT INTO futgg_players(source_card_id,source_player_id,game_year,name,rating,is_active) VALUES
+      (7,7,27,'Lothar Matthäus',90,true),(167773,7,27,'Unknown',0,true);
       INSERT INTO futgg_bin_history(source_card_id,game_year,platform,lowest_bin,captured_at) VALUES
       (1,27,'ps5',20000,now()),(2,27,'ps5',20001,now()),(3,27,'ps5',1000,now()),
       (4,27,'ps5',40000,now()),(5,26,'ps5',40000,now()),(6,27,'ps5',40000,now()-interval '2 hours'),
+      (167773,27,'ps5',30000,now()),
       (2,27,'ps5',999999,now()-interval '61 minutes'),(1,27,'pc',40000,now());`);
     const discovered = await db.query(snapshotSQL('ps5'), [27, 'ps5', null, 300]);
-    assert.deepEqual(discovered.rows.map(r => r.id).sort(), ['2', '3']);
+    assert.deepEqual(discovered.rows.map(r => r.id).sort(), ['167773', '2', '3']);
     assert.equal(Number(discovered.rows.find(r => r.id === '2').price), 20001);
     const tracked = await db.query(snapshotSQL('ps5'), [27, 'ps5', ['1', '2'], 300]);
     assert.deepEqual(tracked.rows.map(r => r.id).sort(), ['1', '2']);
+    const holo = await db.query(snapshotSQL('ps5'), [27, 'ps5', ['167773'], 300]);
+    assert.equal(holo.rows[0].base_name, 'Lothar Matthäus');
     await db.exec(`INSERT INTO futgg_bin_history(source_card_id,game_year,platform,lowest_bin,captured_at) VALUES
       (2,27,'ps5',21000,now()-interval '16 minutes'),(2,27,'ps5',22000,now()-interval '31 minutes'),
       (2,27,'ps5',23000,now()-interval '46 minutes'),(2,27,'ps5',100,now()+interval '1 hour'),
