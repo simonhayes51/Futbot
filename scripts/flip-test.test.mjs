@@ -1,9 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls, enrichCardMetadata, formatReport, privateChannelProblem, tradePostPayload, queueSignalPosts, deliverPendingPosts, deliverToBotQueue} from './flip-test.mjs';
+import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls, enrichCardMetadata, formatReport, privateChannelProblem, tradePostPayload, queueSignalPosts, deliverPendingPosts, deliverToBotQueue, botQueueProblem} from './flip-test.mjs';
 
 const H = 3_600_000, now = Date.UTC(2026, 9, 19, 12);
+test('queue diagnostics distinguish network and schema failures without exposing credentials', async () => {
+  assert.match(botQueueProblem({code: 'ENOTFOUND'}), /hostname cannot be resolved/);
+  assert.match(botQueueProblem({code: '42P01'}), /Flip tables are missing/);
+  assert.match(botQueueProblem({cause: {code: 'ECONNREFUSED'}}), /connection refused/);
+  const secret = 'postgres://username:private-password@private-host/database';
+  const state = emptyState();
+  const report = await deliverToBotQueue(state, {query: async () => {throw {code: '28P01', message: secret};}});
+  assert.match(report.error, /authentication failed/);
+  assert.ok(!report.error.includes(secret));
+  assert.ok(!botQueueProblem({code: secret, message: secret}).includes(secret));
+});
 test('scanner queues live signals only for enabled slash-command destinations, without duplicates', async () => {
   const {PGlite} = await import('@electric-sql/pglite');
   const db = new PGlite();
