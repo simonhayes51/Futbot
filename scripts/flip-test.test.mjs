@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls, enrichCardMetadata, formatReport} from './flip-test.mjs';
+import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls, enrichCardMetadata, formatReport, privateChannelProblem, tradePostPayload, queueSignalPosts, deliverPendingPosts} from './flip-test.mjs';
 
 const H = 3_600_000, now = Date.UTC(2026, 9, 19, 12);
 function card() {
@@ -73,6 +73,40 @@ test('human report formats historical trades and keeps live calls clearly separa
   assert.match(output, /Missed Example.*not observed by 48h/);
   assert.match(output, /Live buy calls: 0/);
   assert.doesNotMatch(output, /LIVE BUY CALL/);
+});
+test('Discord publisher deduplicates calls and refuses a channel visible to everyone', async () => {
+  const state = emptyState();
+  const signal = {id: '67338422', name: 'Dayot Upamecano', rating: 89,
+    rarity: 'Pristine Holographic', entry: 2_400_000, target: 2_744_000,
+    net: 206_800, margin: 0.086, episodes: 3, sourceAt: '2026-10-22T18:00:00.000Z'};
+  assert.equal(queueSignalPosts(state, [signal], '2026-10-22T18:00:00.000Z'), 1);
+  assert.equal(queueSignalPosts(state, [signal], '2026-10-22T18:00:00.000Z'), 1);
+  const channel = {id: '123456789012345678', guild_id: '223456789012345678', type: 0,
+    permission_overwrites: [{id: '223456789012345678', type: 0, deny: '1024'}]};
+  assert.equal(privateChannelProblem(channel), null);
+  assert.match(privateChannelProblem({...channel, permission_overwrites: []}), /not private/);
+  const payload = tradePostPayload(signal, 27, 'ps5', 'dedupe-nonce');
+  assert.deepEqual(payload.allowed_mentions, {parse: []});
+  assert.equal(payload.enforce_nonce, true);
+  assert.match(payload.embeds[0].title, /Dayot Upamecano/);
+  let sentPayload;
+  const fetchImpl = async (url, init) => {
+    if (init.method === 'POST') sentPayload = JSON.parse(init.body);
+    return new Response(JSON.stringify(init.method === 'POST' ? {id: 'message'} : channel),
+      {status: 200, headers: {'Content-Type': 'application/json'}});
+  };
+  const delivered = await deliverPendingPosts(state, {channelId: channel.id, token: 'test-token', fetchImpl});
+  assert.deepEqual(delivered, {enabled: true, posted: 1, pending: 0, error: null});
+  assert.equal(sentPayload.enforce_nonce, true);
+  assert.equal(queueSignalPosts(state, [signal], '2026-10-22T18:00:00.000Z'), 0);
+
+  const unsafe = emptyState(); queueSignalPosts(unsafe, [signal], '2026-10-22T18:00:00.000Z');
+  const blocked = await deliverPendingPosts(unsafe, {channelId: channel.id, token: 'test-token',
+    fetchImpl: async () => new Response(JSON.stringify({...channel, permission_overwrites: []}),
+      {status: 200, headers: {'Content-Type': 'application/json'}})});
+  assert.equal(blocked.posted, 0);
+  assert.equal(blocked.pending, 1);
+  assert.match(blocked.error, /not private/);
 });
 test('rejects falling trends, thin history, unstable prices and stale confirmations', () => {
   const c = card();
