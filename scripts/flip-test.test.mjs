@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls, enrichCardMetadata} from './flip-test.mjs';
+import {eligible, emptyState, ingest, evaluate, marketCheck, scan, snapshotSQL, historySQL, seedHistory, historyCoverage, diagnoseHistory, replayHistoricalPulls, enrichCardMetadata, formatReport} from './flip-test.mjs';
 
 const H = 3_600_000, now = Date.UTC(2026, 9, 19, 12);
 function card() {
@@ -31,6 +31,21 @@ test('historical replay surfaces past qualifying entries separately from live ca
   assert.ok(replay.examples.some(s => s.outcome === 'target_observed'));
   const recentOnly = {...c, history: c.history.filter(p => p.at >= now - 12 * H)};
   assert.equal(replayHistoricalPulls(recentOnly, now).count, 0);
+});
+test('human report formats historical trades and keeps live calls clearly separate', () => {
+  const output = formatReport({at: '2026-10-22T18:07:24.774Z', year: 27, platform: 'ps5',
+    fresh: 300, tracked: 300, historyCoverage: {usableCards: 291}, paused: false,
+    market: {covered: true, medianChange: -0.0031, fallingShare: 0.14}, signals: [], reasons: {},
+    historicalPulls: {setups: 106, targetObserved: 29, examples: [{id: '67338422', name: 'Dayot Upamecano',
+      rating: 89, rarity: 'Destined for Glory · Pristine Holographic', entryAt: '2026-10-22T00:00:00.000Z',
+      entryBin: 2400000, targetBin: 2744000, estimatedNetAfterTax: 206800, estimatedMargin: 0.086,
+      outcome: 'target_observed', targetObservedAt: '2026-10-22T09:00:00.000Z'}]}});
+  assert.match(output, /Historical setups: 106 · target observed 29/);
+  assert.match(output, /Dayot Upamecano \(89 · Destined for Glory · Pristine Holographic\)/);
+  assert.match(output, /buy 2,400,000 coins → target 2,744,000 coins/);
+  assert.match(output, /TARGET OBSERVED at 09:00 UTC/);
+  assert.match(output, /Live buy calls: 0/);
+  assert.doesNotMatch(output, /LIVE BUY CALL/);
 });
 test('rejects falling trends, thin history, unstable prices and stale confirmations', () => {
   const c = card();
