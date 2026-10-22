@@ -14,7 +14,7 @@ test('bot delivers fresh live calls once and cancels unavailable prices and disa
  const {db,pool}=await testDatabase();
  try{
   const signal={id:'123',name:'Example',rating:89,rarity:'Special',entry:90_000,target:100_000,
-   net:5_000,margin:5_000/90_000,episodes:3,sourceAt:Date.now(),reason:'candidate'};
+   net:5_000,margin:5_000/90_000,episodes:1,sourceAt:Date.now(),reason:'candidate'};
   assert.equal(validAutoFlipSignal(signal),true);
   assert.equal(validAutoFlipSignal({...signal,reason:'historical'}),false);
   await pool.query("INSERT INTO futbot_flip_channels(guild_id,platform,channel_id,set_by) VALUES('guild','ps5','private','admin')");
