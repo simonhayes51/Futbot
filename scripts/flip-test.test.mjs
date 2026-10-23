@@ -55,6 +55,15 @@ test('one repeated dip qualifies, isolated peaks cannot raise target', () => {
   c.history[50].values = [900_000];
   assert.equal(evaluate(c, now).target, baseline.target);
 });
+test('a stable 6%+ discount can qualify without being almost exactly at the weekly low', () => {
+  const c = card();
+  c.history = c.history.map(point => ({...point, values: point.values.map(value => value === 92_000 ? 92_000 : 112_000)}));
+  c.recent = [31, 16, 1].map(m => ({at: now - m * 60_000, price: 95_000}));
+  c.price = 95_000;
+  const result = evaluate(c, now);
+  assert.equal(result.reason, 'candidate');
+  assert.ok(result.net / result.entry >= 0.05);
+});
 test('historical replay surfaces past qualifying entries separately from live calls', () => {
   const c = card(); c.id = 'historical-1';
   const replay = replayHistoricalPulls(c, now);
