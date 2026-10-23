@@ -33,7 +33,7 @@ Keep the dashboard's start command `npm run migrate && npm run start:web` (or
 `npm run migrate && npm start` when it runs alongside the bot). Set the worker to:
 
 ```bash
-npm run migrate && npm run content:watch -- watch --database --deliver --interval 300
+npm run migrate && npm run content:watch -- watch --deliver --interval 300
 ```
 
 Keep the existing `DISCORD_TOKEN`, `PRICE_DATABASE_URL`, `GAME_YEAR` and `PLATFORM`
@@ -136,7 +136,7 @@ Read exact-card metadata and recent prices from the bot's existing read-only sou
 
 ```bash
 npm run content:watch -- report --database --platform ps5
-npm run content:watch -- watch --database --platform ps5 --interval 300
+npm run content:watch -- watch --platform ps5 --interval 300
 ```
 
 This uses `PRICE_DATABASE_URL`, the existing console/PC history tables and an enforced
@@ -185,9 +185,9 @@ Discord user ID in the service environment. Do not put either value in a command
 snapshot or Git. Delivery stays off unless explicitly enabled:
 
 ```bash
-npm run content:watch -- watch --database --deliver --interval 300
+npm run content:watch -- watch --deliver --interval 300
 # Or retry pending events once:
-npm run content:watch -- deliver --database
+npm run content:watch -- deliver
 ```
 
 Alerts include the evidence label, changed fields, requirements, and up to five
@@ -210,7 +210,7 @@ node --import tsx --test src/content-watch.test.ts
 npm test
 ```
 
-Run this as a separate worker with `npm run content:watch -- watch --database
+Run this as a separate worker with `npm run content:watch -- watch
 --deliver --interval 300` after importing its baseline on its persistent volume.
 Starting the normal bot does not implicitly enable this worker. No messages are sent
 during tests or HAR imports without `--deliver`.
