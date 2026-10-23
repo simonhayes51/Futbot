@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
-import {EACollector,EAAuthRequired,EARateLimited,UT_ORIGIN,allowedEAPage,contentPath,browserInput} from './ea-browser-collector.js';
+import {EACollector,EACollectionFailure,collectionFailureMessage,EAAuthRequired,EARateLimited,UT_ORIGIN,allowedEAPage,contentPath,browserInput} from './ea-browser-collector.js';
 import {allowedUTRequest} from './ea-browser-worker.js';
 import {browserAction,browserFrame,browserStatus,enqueueBrowserAction} from './ea-browser-control.js';
 import {encrypt,decrypt,hash} from './auth.js';
@@ -69,4 +69,14 @@ test('remote browser APIs enforce session, CSRF and the exact configured operato
 });
 test('phone connection panel escapes errors and offers controls without embedding EA in an iframe',async()=>{
  const dom=new JSDOM('<main></main>',{url:'https://futbot.test/app/',runScripts:'outside-only'});try{const w=dom.window as any;w.eval(await readFile(new URL('../dist/app/ea-browser.js',import.meta.url),'utf8'));w.document.querySelector('main').innerHTML=await w.FutbotEABrowser.render(async()=>({phase:'needs_login',online:true,last_error:'<script>bad()</script>'}));assert.equal(w.document.querySelectorAll('iframe,script').length,0);assert.match(w.document.querySelector('main').textContent,/Connect EA/);assert.ok(w.document.querySelector('#ea-type-form'));}finally{dom.window.close();}
+});
+
+test('collector reports safe HTTP and transport diagnostics without leaking response bodies or credentials',async()=>{
+ const f=await collectorFixture(500);await assert.rejects(f.collector.scan(),e=>{
+  assert.equal(collectionFailureMessage(e),'EA returned HTTP 500 at /sbs/hub/v2. The previous baseline is intact.');return true;
+ });
+ assert.doesNotMatch(collectionFailureMessage(new Error('PRIVATE_SESSION password=secret')),/PRIVATE_SESSION|password|secret/);
+ assert.equal(collectionFailureMessage(new EACollectionFailure('Unexpected EVO hub response.')),'Unexpected EVO hub response.');
+ const transport=await collectorFixture();(transport.collector as any).context.request.get=async()=>{throw new Error('Authorization PRIVATE_SESSION');};
+ await assert.rejects(transport.collector.scan(),e=>{assert.match(collectionFailureMessage(e),/timed out at \/sbs\/hub\/v2/);assert.doesNotMatch(collectionFailureMessage(e),/Authorization|PRIVATE_SESSION/);return true;});
 });

@@ -6,7 +6,7 @@ import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {encrypt,decrypt} from './auth.js';
 import {browserAction,EA_VIEWPORT,type BrowserAction} from './ea-browser-control.js';
-import {EACollector,EAAuthRequired,EARateLimited,EA_APP,UT_ORIGIN,allowedEAPage,browserInput} from './ea-browser-collector.js';
+import {EACollector,collectionFailureMessage,EAAuthRequired,EARateLimited,EA_APP,UT_ORIGIN,allowedEAPage,browserInput} from './ea-browser-collector.js';
 import {databaseWatch,WatchBusy} from './content-watch-store.js';
 import {applyCapture} from './content-watch.js';
 const pause=(ms:number)=>new Promise(r=>setTimeout(r,ms));
@@ -57,6 +57,7 @@ async function run(){
   await pool.query("UPDATE futbot_ea_browser SET frame_cipher=$2,frame_at=now() WHERE game_year=$1 AND interactive_until>now()",[year,encrypt(image.toString('base64'),secret!)]);lastFrame=Date.now();
  }
  async function scan(){
+  console.log('EA content check started.');
   await patch({phase:'checking'});
   try{
    let capture;
@@ -77,7 +78,7 @@ async function run(){
    nextScan=Date.now()+interval;
    if(e instanceof EAAuthRequired)await patch({phase:'needs_login',enabled:false,error:'EA requires login or verification. Open Connect EA to resume.'});
    else if(e instanceof EARateLimited)await patch({phase:'paused',enabled:false,error:'EA rate limited the requests. Checks paused; wait before restarting.'});
-   else await patch({phase:'error',error:'Content check failed. The previous baseline is intact. Try again later.'});
+   else {const detail=collectionFailureMessage(e);console.error('EA content check failed: '+detail);await patch({phase:'error',error:detail});}
   }
  }
  async function act(action:BrowserAction){
