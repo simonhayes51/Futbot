@@ -73,9 +73,11 @@ async function run(){
    }
    let saved=false;
    for(let i=0;i<4&&!saved;i++)try{
-    await databaseWatch(pool,year,async(state,save,metadata)=>{const first=!Object.keys(state.records).length;const events=applyCapture(state,capture,first);metadata.lastAuthenticatedScanAt=new Date().toISOString();await save();console.log(`EA content check saved: ${events.length} changes; ${capture.coverage.evoFetched}/${capture.coverage.evoExpected} EVO definitions.`);});saved=true;
+    await databaseWatch(pool,year,async(state,save,metadata)=>{const first=!Object.keys(state.records).length;const events=applyCapture(state,capture,first);metadata.lastAuthenticatedScanAt=new Date().toISOString();metadata.lastAuthenticatedSbcCoverage=capture.sbcCoverage;metadata.lastAuthenticatedWarnings=capture.warnings;await save();console.log(`EA content check saved: ${events.length} changes; ${capture.coverage.evoFetched}/${capture.coverage.evoExpected} EVO definitions.`);});saved=true;
    }catch(e){if(!(e instanceof WatchBusy)||i===3)throw e;await pause(1000);}
-   nextScan=Date.now()+interval;await patch({phase:'ready',enabled:true,scanned:true});
+   const warning=capture.warnings.length?`Partial SBC coverage: ${capture.sbcCoverage.fetched}/${capture.sbcCoverage.expected} sets refreshed. ${capture.warnings.join(' ')} EVO definitions: ${capture.coverage.evoFetched}/${capture.coverage.evoExpected}.`:null;
+   if(warning)console.warn(warning);
+   nextScan=Date.now()+interval;await patch({phase:'ready',enabled:true,scanned:true,error:warning});
   }catch(e){
    nextScan=Date.now()+interval;
    if(e instanceof EAAuthRequired)await patch({phase:'needs_login',enabled:false,error:'EA requires login or verification. Open Connect EA to resume.'});

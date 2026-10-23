@@ -3,6 +3,10 @@ import {makeCapture,readHar,publicContentUrl,type Capture,type Document} from '.
 export const EA_APP='https://www.ea.com/ea-sports-fc/ultimate-team/web-app/';
 export const UT_ORIGIN='https://utas.mob.v1.prd.futc-ext.gcp.ea.com';
 export class EACollectionFailure extends Error{}
+export class EAServerFailure extends EACollectionFailure{
+ constructor(readonly status:number,readonly endpoint:string){super(`EA returned HTTP ${status} at ${endpoint}. The previous baseline is intact.`);}
+}
+export type AuthenticatedCapture=Capture&{sbcCoverage:{expected:number;fetched:number};warnings:string[]};
 // Only errors constructed here may reach logs or the dashboard. Never forward
 // Playwright/HTTP/SQL messages: they can contain headers, URLs or credentials.
 export function collectionFailureMessage(error:unknown):string{
@@ -40,7 +44,7 @@ export class EACollector{
  }
  hasSession():boolean{return Boolean(this.sid);}
  clearSession():void{this.sid=undefined;}
- async scan():Promise<Capture>{
+ async scan():Promise<AuthenticatedCapture>{
   if(!this.sid)throw new EAAuthRequired('Reconnect to EA to resume content checks.');
   const documents:Document[]=[];let requests=0;const deadline=Date.now()+180000;
   const get=async(path:string):Promise<any>=>{
@@ -52,13 +56,23 @@ export class EACollector{
    try{
    if([401,403,458,459,460,461].includes(response.status())){this.clearSession();throw new EAAuthRequired('EA requires login or verification.');}
    if(response.status()===429)throw new EARateLimited(retryAfterDelay(response.headers()['retry-after']),label);
+   if(response.status()>=500&&response.status()<=599)throw new EAServerFailure(response.status(),label);
    if(!response.ok())throw new EACollectionFailure(`EA returned HTTP ${response.status()} at ${label}. The previous baseline is intact.`);
    let body;try{body=await response.json();}catch{throw new EACollectionFailure(`EA returned invalid JSON at ${label}. The previous baseline is intact.`);}documents.push({url:url.split('?')[0],capturedAt:new Date().toISOString(),body});return body;
    }finally{await response.dispose();}
   };
   const hub=await get('/sbs/hub/v2');if(!Array.isArray(hub.categories))throw new EACollectionFailure('Unexpected SBC hub response. The previous baseline is intact.');
   const ids=new Set<number>();for(const c of hub.categories)for(const s of c.sets??[]){if(!Number.isSafeInteger(s.setId)||s.setId<=0)throw new EACollectionFailure('Unexpected SBC set ID. The previous baseline is intact.');ids.add(s.setId);}
-  for(const id of ids){const b=await get(`/sbs/setId/${id}/challenges`);if(!Array.isArray(b.challenges))throw new EACollectionFailure('Unexpected SBC challenge response. The previous baseline is intact.');}
+  const warnings:string[]=[];let sbcFetched=0;
+  for(const id of ids){
+   try{const b=await get(`/sbs/setId/${id}/challenges`);if(!Array.isArray(b.challenges))throw new EACollectionFailure('Unexpected SBC challenge response. The previous baseline is intact.');sbcFetched++;}
+   catch(e){
+    // A single advertised set can fail independently. Keep its previous data and
+    // continue; authentication, rate limits, network and schema failures still stop.
+    if(!(e instanceof EAServerFailure))throw e;
+    warnings.push(`SBC set ${id} unavailable (HTTP ${e.status}). Previous challenge data retained if present; no fresh requirements collected for this set.`);
+   }
+  }
   const evos=await get('/academy/hub/v2');if(!Array.isArray(evos.categories)||!Array.isArray(evos.slots))throw new EACollectionFailure('Unexpected EVO hub response. The previous baseline is intact.');
   for(const c of evos.categories){
    if(!Number.isSafeInteger(c.id)||c.id<0||!Number.isSafeInteger(c.count)||c.count<0||c.count>1000)throw new EACollectionFailure('Unexpected EVO category. The previous baseline is intact.');
@@ -69,7 +83,7 @@ export class EACollector{
    }
    if(seen.size<c.count)throw new EACollectionFailure('Incomplete EVO category. The previous baseline is intact.');
   }
-  documents.push(...this.publicDocuments.values());const capture=makeCapture(documents,[...this.publicDocuments.keys()]);this.publicDocuments.clear();return capture;
+  documents.push(...this.publicDocuments.values());const capture=makeCapture(documents,[...this.publicDocuments.keys()]);this.publicDocuments.clear();return {...capture,sbcCoverage:{expected:ids.size,fetched:sbcFetched},warnings};
  }
 }
 export async function browserInput(page:Page,action:import('./ea-browser-control.js').BrowserAction):Promise<void>{

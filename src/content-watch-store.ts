@@ -1,6 +1,6 @@
 import type pg from 'pg';
 import {emptyState,type WatchState} from './content-watch.js';
-export type WatchMetadata={lastUploadAt?:string;lastUploadMode?:string;lastPublicPollAt?:string;lastPollError?:string|null;lastAuthenticatedScanAt?:string};
+export type WatchMetadata={lastUploadAt?:string;lastUploadMode?:string;lastPublicPollAt?:string;lastPollError?:string|null;lastAuthenticatedScanAt?:string;lastAuthenticatedSbcCoverage?:{expected:number;fetched:number};lastAuthenticatedWarnings?:string[]};
 export class WatchBusy extends Error{}
 export async function databaseWatch<T>(pool:Pick<pg.Pool,'connect'>,year:number,work:(state:WatchState,save:()=>Promise<void>,metadata:WatchMetadata)=>Promise<T>):Promise<T>{
  const client=await pool.connect();let locked=false;

@@ -129,3 +129,16 @@ Playwright browser download hosts are reachable. If EA rejects the browser or sh
 verification that cannot be completed, pause the pilot. This implementation does
 not include stealth plugins, CAPTCHA bypass, automated password recovery or an
 unattended credential-login script.
+
+## Partial SBC responses
+
+If an advertised SBC set's challenge endpoint returns HTTP 5xx (including 512),
+that set is recorded as unavailable for the current scan. The collector continues
+with the other SBC sets and EVO pages. Existing challenge definitions for the
+unavailable set remain untouched. The connection panel and worker logs show the
+SBC coverage and unavailable set IDs, and scan metadata preserves the warnings.
+A new authenticated scan timestamp can therefore represent a partial SBC scan;
+always check warnings. No 5xx retry loop runs within that scan. Authentication,
+rate-limit, transport, malformed-data and incomplete-EVO errors still abort rather
+than report a complete snapshot. HTTP 512 alone does not establish why EA refused
+the set or whether it contains unreleased content.
