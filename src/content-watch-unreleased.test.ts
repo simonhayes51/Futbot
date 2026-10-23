@@ -12,11 +12,24 @@ function fixture(){
 }
 test('public pack extraction includes ordinary packs, without declaring every catalogue entry unreleased',()=>{
  const {state,capture}=fixture();assert.equal(definitions(capture).length,3);
- assert.ok(unreleasedReason(state,state.records['evo-clue:pack-20304'].definition,now));
+ assert.equal(unreleasedReason(state,state.records['evo-clue:pack-20304'].definition,now),undefined);
  assert.equal(unreleasedReason(state,state.records['pack-clue:pack-20301'].definition,now),undefined);
  assert.equal(unreleasedReason(state,state.records['pack-clue:pack-851'].definition,now),undefined);
- // The one dated setup confirmation must not remain valid indefinitely.
+ // Pack names and an absent menu entry never provide an implicit confirmation.
  assert.equal(unreleasedReason(state,state.records['evo-clue:pack-20304'].definition,now+86400000),undefined);
+});
+test('Twilight catalogue text and an old queued alert stay unconfirmed without an explicit assessment',async()=>{
+ const {state}=fixture();const d=state.records['evo-clue:pack-20304'].definition;
+ state.events.push({id:'old-twilight',key:d.key,at:new Date(now).toISOString(),type:'added',after:d});
+ queueUnreleased(state,now);assert.equal(state.events.length,1);
+ assert.equal(await deliverPending(state,async()=>{assert.fail('unconfirmed pack sent');},async()=>{}),0);
+ assert.equal(watchSummary(state,{}).unreleased.length,0);
+});
+test('an expired definition cannot qualify through a future release date or owner assessment',()=>{
+ const {state}=fixture();const d=state.records['evo-clue:pack-20304'].definition;
+ d.expires=now/1000-60;assessRelease(state,d.key,'unreleased',now);
+ assert.equal(unreleasedReason(state,d,now),undefined);
+ assert.equal(unreleasedReason(state,{...d,evidence:'served-definition',release:now/1000+3600},now),undefined);
 });
 test('newly captured live items and old pending alerts never enter unreleased delivery',async()=>{
  const {state}=fixture();const live:Definition={key:'evo:123',kind:'evo',id:'123',name:'Already live',description:'',source:'/academy/hub/v2',rules:[],details:{},evidence:'served-definition'};

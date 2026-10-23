@@ -12,12 +12,12 @@ Two positive signals are supported:
 - Owner confirmation on a public catalogue entry, valid for 24 hours. A missing
   menu entry or newly seen catalogue string is not itself treated as proof.
 
-The one setup exception is Twilight Screamer EVO Pack, catalogue ID 20304, which
-the owner confirmed unreleased on 23 October 2026. That dated confirmation applies
-only on that UTC date and only to that exact item, not to every Scream pack. Renew
-it through the review controls if it is still unreleased afterwards. Its description
-contains partial Batigol Precision requirements; upgrades, cost and release time
-remain unknown. No eligible-player certification is inferred from partial clues.
+There are no built-in owner confirmations or exceptions for named packs. The
+earlier Twilight Screamer/Batigol alert used an unjustified setup assumption;
+catalogue text can refer to content that has already been released and expired.
+Such entries remain unconfirmed unless explicitly assessed through the review
+controls. A supplied expiry in the past always suppresses an unreleased signal.
+No eligible-player certification is inferred from partial clues.
 
 The main page shows these findings with the original text, extracted requirements,
 source and release-status basis. Use **Now released — remove** when it becomes

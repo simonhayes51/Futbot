@@ -1,14 +1,12 @@
 import type {Definition,WatchState,Change} from './content-watch.js';
 import {fingerprint} from './content-watch.js';
 export type ReleaseCheck={status:'unreleased'|'released'|'ignore';at:string;until?:string;basis:string};
-export function releaseCheck(state:WatchState,d:Definition,now=Date.now()):ReleaseCheck|undefined{
- const explicit=state.releaseChecks&&Object.hasOwn(state.releaseChecks,d.key)?state.releaseChecks[d.key]:undefined;if(explicit)return explicit;
- // The owner confirmed this specific item in the setup conversation on this date.
- // Do not generalise that confirmation to all Scream entries or later days.
- if(state.gameYear===27&&d.key==='evo-clue:pack-20304'&&d.name==='Twilight Screamer EVO Pack'&&new Date(now).toISOString().slice(0,10)==='2026-10-23')return {status:'unreleased',at:'2026-10-23',until:'2026-10-24T00:00:00Z',basis:'Owner confirmed unreleased on 23 October 2026'};
+export function releaseCheck(state:WatchState,d:Definition):ReleaseCheck|undefined{
+ return state.releaseChecks&&Object.hasOwn(state.releaseChecks,d.key)?state.releaseChecks[d.key]:undefined;
 }
 export function unreleasedReason(state:WatchState,d:Definition,now=Date.now()):string|undefined{
- const check=releaseCheck(state,d,now);
+ if(d.expires&&Number.isFinite(d.expires)&&d.expires*1000<=now)return;
+ const check=releaseCheck(state,d);
  if(check?.status==='released'||check?.status==='ignore')return;
  // Menu definitions are retained for comparison; they do not become leak alerts.
  if(d.evidence==='served-definition'){
