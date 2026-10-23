@@ -51,8 +51,14 @@ test('upload API enforces login, CSRF and owner access, and invalid files leave 
   const initial=await fetch(base+'/api/content-watch/import?mode=baseline',{method:'POST',headers,body:JSON.stringify(har())});assert.equal(initial.status,200);const data=await initial.json() as any;assert.equal(data.baseline,true);assert.equal(data.definitions,1);assert.equal(data.changes,0);
   const changed=await fetch(base+'/api/content-watch/import?mode=changes',{method:'POST',headers,body:JSON.stringify(har(82,'2026-10-23T07:21:00.000Z'))});assert.equal(changed.status,200);assert.equal(((await changed.json()) as any).changes,1);
   const invalid=await fetch(base+'/api/content-watch/import',{method:'POST',headers,body:'{"log":'});assert.equal(invalid.status,400);
-  const current=await fetch(base+'/api/content-watch',{headers});const status=await current.json() as any;assert.equal(status.definitions,1);assert.equal(status.pendingAlerts,1);
-  const content=await (await fetch(base+'/api/content-watch/report',{headers})).text();assert.match(content,/Striker EVO/);assert.doesNotMatch(content,/SESSION_SECRET|PRIVATE_CLUB/);
+  const current=await fetch(base+'/api/content-watch',{headers});const status=await current.json() as any;assert.equal(status.definitions,1);assert.equal(status.pendingAlerts,0);assert.deepEqual(status.recent,[]);
+  const releasePath=base+'/api/content-watch/release-status';
+  assert.equal((await fetch(releasePath,{method:'POST',headers:{...headers,'X-CSRF-Token':'bad'},body:JSON.stringify({key:'evo:1',status:'released'})})).status,403);
+  assert.equal((await fetch(releasePath,{method:'POST',headers:{...headers,Cookie:'futbot=other-token'},body:JSON.stringify({key:'evo:1',status:'released'})})).status,403);
+  assert.equal((await fetch(releasePath,{method:'POST',headers,body:JSON.stringify({key:'missing',status:'released'})})).status,404);
+  assert.equal((await fetch(releasePath,{method:'POST',headers,body:JSON.stringify({key:'__proto__',status:'unreleased'})})).status,404);
+  assert.equal((await fetch(releasePath,{method:'POST',headers,body:JSON.stringify({key:'evo:1',status:'released'})})).status,200);
+  const content=await (await fetch(base+'/api/content-watch/report',{headers})).text();assert.doesNotMatch(content,/Striker EVO/);assert.doesNotMatch(content,/SESSION_SECRET|PRIVATE_CLUB/);
  }finally{await new Promise<void>(r=>server.close(()=>r()));await db.close();}
 });
 test('upload panel escapes imported names and sends selected file with CSRF',async()=>{

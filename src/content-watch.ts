@@ -8,13 +8,13 @@ const positions=['GK','SW','RWB','RB','RCB','CB','LCB','LB','LWB','RDM','CDM','L
 // Verified against AcademyEligibilityAttribute / Scope in the captured FC27 client.
 const attributes=['NONE','OVR','PACE','SHOOTING','PASSING','DRIBBLING_MAIN','DEFENSE','PHYSICALITY','ACCELERATION','SPRINT_SPEED','AGILITY','BALANCE','JUMPING','STAMINA','STRENGTH','REACTIONS','AGGRESSION','COMPOSURE','INTERCEPTIONS','POSITIONING','VISION','BALL_CONTROL','CROSSING','DRIBBLING_SUB','FINISHING','FK_ACC','HEADING_ACC','LONG_PASSING','SHORT_PASSING','DEF_AWARENESS','SHOT_POWER','LONG_SHOTS','STANDING_TACKLE','SLIDING_TACKLE','VOLLEYS','CURVE','PENALTIES','WEAK_FOOT','SKILL_MOVES','ATTACK_WORK_RATE','DEFENSIVE_WORK_RATE','DEFINITION_ID','NATION','CLUB','LEAGUE','RARITY','RARITY_NEGATED','POSITION','POSITION_NEGATED','POSSIBLE_POSITIONS_COUNT','BASE_TRAITS_COUNT','ICON_TRAITS_COUNT','TOTAL_TRAITS_COUNT','BASE_TRAIT_PRESENT','ICON_TRAIT_PRESENT','UNTRADEABLE','PLAYER_ROLE_PLUS_PRESENT','PLAYER_ROLE_PLUSPLUS_PRESENT','PLAYER_ROLE_PLUS_COUNT','PLAYER_ROLE_PLUSPLUS_COUNT','PLAYER_ROLE_PLUS_OR_PLUSPLUS_TOTAL_COUNT','DEFINITION_ID_NEGATED','RARITY_GROUP','RARITY_GROUP_NEGATED'];
 export type Rule={attribute:string;scope:'min'|'max'|'exact'|'between'|'unknown';targets:(number|string)[];raw?:unknown};
-export type Definition={key:string;kind:'evo'|'sbc'|'sbc-challenge'|'evo-clue'|'evo-text';id:string;name:string;description:string;source:string;rules:Rule[];details:Obj;release?:number;expires?:number;evidence:'served-definition'|'catalogue-text'};
+export type Definition={key:string;kind:'evo'|'sbc'|'sbc-challenge'|'evo-clue'|'evo-text'|'pack-clue';id:string;name:string;description:string;source:string;rules:Rule[];details:Obj;release?:number;expires?:number;evidence:'served-definition'|'catalogue-text'};
 export type Document={url:string;capturedAt:string;body:unknown};
 export type Capture={capturedAt:string;documents:Document[];publicUrls:string[];coverage:{evoExpected:number;evoFetched:number}};
 export type Player={id:string;name:string;rating?:number;positions?:string[];stats?:Record<string,number>;basePlayStyles?:number;plusPlayStyles?:number;rarityId?:number;nationId?:number;leagueId?:number;definitionId?:number;skills?:number;weakFoot?:number;price?:number;priceCheckedAt?:string;platform?:string;gameYear?:number};
 export type Match={player:Player;result:'eligible'|'ineligible'|'unverified';reasons:string[]};
 export type Change={id:string;key:string;at:string;type:'added'|'changed';before?:Definition;after:Definition;delivered?:boolean};
-export type WatchState={version:1;gameYear:number;publicUrls:string[];records:Record<string,{definition:Definition;hash:string;firstSeen:string;lastSeen:string}>;events:Change[];lastRun?:string;coverage?:Capture['coverage']};
+export type WatchState={version:1;gameYear:number;publicUrls:string[];records:Record<string,{definition:Definition;hash:string;firstSeen:string;lastSeen:string}>;events:Change[];lastRun?:string;coverage?:Capture['coverage'];releaseChecks?:Record<string,import('./content-watch-unreleased.js').ReleaseCheck>};
 export function emptyState(gameYear=27):WatchState{return {version:1,gameYear,publicUrls:[],records:{},events:[]};}
 function canonical(v:unknown):unknown{if(Array.isArray(v))return v.map(canonical);if(v&&typeof v==='object')return Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b)).map(([k,x])=>[k,canonical(x)]));return v;}
 export function fingerprint(v:unknown):string{return createHash('sha256').update(JSON.stringify(canonical(v))).digest('hex');}
@@ -75,8 +75,9 @@ export function definitions(capture:Capture):Definition[]{
   }
   if(d.url.endsWith('.xml')&&typeof d.body==='string'){
    const strings=xmlStrings(d.body);for(const [k,description] of Object.entries(strings)){
-    const m=k.match(/^FUT_STORE_PACK_(\d+)_DESC$/);if(!m||!/evolution consumable|evolution will be available|EVO pack/i.test(description+' '+strings[`FUT_STORE_PACK_${m[1]}_NAME`]))continue;
-    const key=`evo-clue:pack-${m[1]}`;records.set(key,{key,kind:'evo-clue',id:m[1],name:strings[`FUT_STORE_PACK_${m[1]}_NAME`]??`Pack ${m[1]}`,description,source,rules:clueRules(description),evidence:'catalogue-text',details:{upgradesKnown:false,requirementsComplete:false,releaseKnown:false}});
+    const m=k.match(/^FUT_STORE_PACK_(\d+)_DESC$/);if(!m)continue;
+    const isEvo=/evolution consumable|evolution will be available|EVO pack/i.test(description+' '+strings[`FUT_STORE_PACK_${m[1]}_NAME`]);
+    const key=`${isEvo?'evo-clue':'pack-clue'}:pack-${m[1]}`;records.set(key,{key,kind:isEvo?'evo-clue':'pack-clue',id:m[1],name:strings[`FUT_STORE_PACK_${m[1]}_NAME`]??`Pack ${m[1]}`,description,source,rules:clueRules(description),evidence:'catalogue-text',details:{upgradesKnown:false,requirementsComplete:false,releaseKnown:false}});
    }
   }
   if(/\/loc\/.+en-US\.json$/.test(d.url)||/\/web-app\/loc\/en-US\.json$/.test(d.url))for(const [k,name] of Object.entries(b)){

@@ -159,3 +159,5 @@ See [setup and limitations](scripts/content-watch.md).
 An optional [automatic EA browser worker](scripts/automatic-ea-browser.md) can collect
 authenticated SBC/EVO definitions and provides owner-only phone login controls.
 It requires a separate Chromium container and a live login pilot on Railway.
+
+Unreleased-only catalogue monitoring and release-status controls: [scripts/unreleased-content.md](scripts/unreleased-content.md).

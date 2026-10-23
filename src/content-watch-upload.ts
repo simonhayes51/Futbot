@@ -1,3 +1,4 @@
+import {isUnreleasedEvent,unreleasedRecords,unreleasedReason} from './content-watch-unreleased.js';
 import {Readable,Transform,Writable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {parser} from 'stream-json';
@@ -28,6 +29,8 @@ export async function streamHar(source:Readable,maxBytes=MAX_HAR_BYTES):Promise<
 }
 export function watchSummary(state:WatchState,metadata:Record<string,unknown>){
  const records=Object.values(state.records),counts:Record<string,number>={};for(const r of records)counts[r.definition.kind]=(counts[r.definition.kind]??0)+1;
- return {ready:records.length>0,definitions:records.length,counts,coverage:state.coverage??null,publicSources:state.publicUrls.length,pendingAlerts:state.events.filter(e=>!e.delivered).length,lastScan:state.lastRun??null,metadata,
-  recent:state.events.slice(-20).reverse().map(e=>({id:e.id,name:e.after.name,kind:e.after.kind,type:e.type,at:e.at,evidence:e.after.evidence}))};
+ return {ready:records.length>0,definitions:records.length,counts,coverage:state.coverage??null,publicSources:state.publicUrls.length,pendingAlerts:state.events.filter(e=>!e.delivered&&isUnreleasedEvent(state,e)).length,lastScan:state.lastRun??null,metadata,
+  catalogueReview:records.filter(r=>r.definition.evidence==='catalogue-text').map(r=>({key:r.definition.key,name:r.definition.name,description:r.definition.description,source:r.definition.source})),
+  unreleased:unreleasedRecords(state).map(r=>({key:r.definition.key,name:r.definition.name,kind:r.definition.kind,description:r.definition.description,rules:r.definition.rules,source:r.definition.source,firstSeen:r.firstSeen,reason:unreleasedReason(state,r.definition)})),
+  recent:state.events.filter(e=>isUnreleasedEvent(state,e)).slice(-20).reverse().map(e=>({id:e.id,name:e.after.name,kind:e.after.kind,type:e.type,at:e.at,evidence:e.after.evidence}))};
 }
