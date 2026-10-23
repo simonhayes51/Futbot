@@ -42,10 +42,23 @@ function status(d:Definition,now=Date.now()):string{
  return 'SERVED DEFINITION — advance availability unproven';
 }
 export function changeMessage(event:Change,releaseBasis?:string):string{
- const d=event.after;const lines=[`Unreleased content ${event.type==='added'?'found':'updated'}: ${d.name}`,releaseBasis??status(d),`First observed change: ${event.at}`,d.description.slice(0,700),...d.rules.slice(0,10).map(ruleText)];
- if(event.before)lines.push('Changed fields: '+['name','description','rules','details','release','expires'].filter(k=>JSON.stringify((event.before as any)[k])!==JSON.stringify((d as any)[k])).join(', '));
- if(d.kind==='sbc-challenge')lines.push('SBC requirements: '+JSON.stringify(d.details.rawRequirements).slice(0,600));
- lines.push('Evidence: '+d.source,'Candidate signal only. No profit or release guarantee.');return lines.filter(Boolean).join('\n').slice(0,1900);
+ const d=event.after;const lines=[`**${event.type==='added'?'New':'Updated'} unreleased-content candidate**`,`**${d.name}**`,releaseBasis??status(d),`**First spotted:** <t:${Math.floor(Date.parse(event.at)/1000)}:R>`,d.description.slice(0,700)];
+ if(d.rules.length)lines.push('**Eligibility**',...d.rules.slice(0,10).map(r=>'• '+ruleText(r)));
+ if(event.before)lines.push('**Changed:** '+['name','description','rules','details','release','expires'].filter(k=>JSON.stringify((event.before as any)[k])!==JSON.stringify((d as any)[k])).join(', '));
+ if(d.kind==='sbc-challenge')lines.push('**SBC requirements:** '+JSON.stringify(d.details.rawRequirements).slice(0,600));
+ lines.push(`**Source:** ${d.source}`,'_Catalogue/EA signal only. Check in-game availability before buying; no profit or release guarantee._');return lines.filter(Boolean).join('\n').slice(0,1900);
+}
+export function alertEmbed(event:Change,releaseBasis:string|undefined,marketMatches:string[]){
+ const d=event.after,observed=Date.parse(event.at),fields:{name:string;value:string;inline?:boolean}[]=[];
+ if(d.description)fields.push({name:'Pack / content details',value:d.description.replace(/\s+/g,' ').slice(0,1000)});
+ if(d.rules.length)fields.push({name:'Eligibility',value:d.rules.slice(0,10).map(ruleText).join('\n').slice(0,1000)});
+ if(d.kind==='sbc-challenge'&&d.details.rawRequirements)fields.push({name:'SBC requirements',value:JSON.stringify(d.details.rawRequirements).slice(0,1000)});
+ fields.unshift({name:'Content type',value:d.kind==='evo-clue'?'EVO pack':d.kind==='pack-clue'?'Pack':d.kind==='sbc-challenge'?'SBC challenge':d.kind.toUpperCase(),inline:true});
+ fields.push({name:'Detected',value:Number.isFinite(observed)?`<t:${Math.floor(observed/1000)}:F> (<t:${Math.floor(observed/1000)}:R>)`:event.at,inline:true});
+ if(event.before){const changed=['name','description','rules','details','release','expires'].filter(k=>JSON.stringify((event.before as any)[k])!==JSON.stringify((d as any)[k]));if(changed.length)fields.push({name:'Updated',value:changed.join(', '),inline:true});}
+ fields.push({name:'Player shortlist',value:marketMatches.length?marketMatches.join('\n'):'No verified players with fresh prices available.'});
+ fields.push({name:'Evidence',value:d.source.slice(0,1000)});
+ return {title:`${event.type==='added'?'New':'Updated'} candidate · ${d.name}`.slice(0,256),description:`**${releaseBasis??status(d)}**\n\nCatalogue data can reveal content before release, but availability is not guaranteed. Check in-game before buying players.`,color:0x2444c5,fields,footer:{text:'Content signal only · no profit or release guarantee'}};
 }
 // Catalogue text has incomplete eligibility; fetching every player's price cannot
 // turn it into a verified shortlist. Only load prices when there is useful work.
@@ -67,8 +80,8 @@ async function discordSender(userId:string,token:string,players:Player[],state:W
  if(!/^\d{17,20}$/.test(channel.id))throw new Error('Invalid private Discord channel');
  return async event=>{
   const matches=shortlist(event.after,players,platform,year,maxAge).filter(m=>m.result==='eligible'&&m.player.price!==undefined).slice(0,5);
-  const picks=matches.length?'\nVerified eligible, fresh prices:\n'+matches.map(m=>`${m.player.name}: ${m.player.price!.toLocaleString('en-GB')} coins`).join('\n'):'\nNo fully verified shortlist with fresh prices available.';
-  await request(`/channels/${channel.id}/messages`,{content:changeMessage(event,unreleasedReason(state,event.after)).slice(0,1500)+picks.slice(0,450),allowed_mentions:{parse:[]},nonce:event.id.slice(0,24),enforce_nonce:true});
+  const picks=matches.map(m=>`${m.player.name}: ${m.player.price!.toLocaleString('en-GB')} coins`);
+  await request(`/channels/${channel.id}/messages`,{embeds:[alertEmbed(event,unreleasedReason(state,event.after),picks)],allowed_mentions:{parse:[]},nonce:event.id.slice(0,24),enforce_nonce:true});
  };
 }
 export function report(state:WatchState,players:Player[],platform:string,maxAge:number):string{

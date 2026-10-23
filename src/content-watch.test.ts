@@ -4,7 +4,7 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {applyCapture,emptyState,definitions,makeCapture,readHar,decodeRules,matchPlayer,shortlist,clueRules,publicContentUrl,type Definition,type Player} from './content-watch.js';
-import {fetchPublic,deliverPending,withLock,atomicJson,loadState,changeMessage} from './content-watch-runner.js';
+import {fetchPublic,deliverPending,withLock,atomicJson,loadState,changeMessage,alertEmbed} from './content-watch-runner.js';
 import {playerFromRow} from './content-watch-players.js';
 import vm from 'node:vm';
 const date='2026-10-23T07:19:00.000Z';
@@ -70,6 +70,14 @@ test('on-disk atomic state survives reload, and concurrent writers are rejected'
 });
 test('catalogue clues are labelled as unconfirmed rather than promised early buys',()=>{
  const d={...def(),evidence:'catalogue-text' as const};const message=changeMessage({id:'1',key:d.key,at:date,type:'added',after:d});assert.match(message,/release unconfirmed/);assert.doesNotMatch(message,/buy now/i);
+});
+test('private alerts use a scannable embed with eligibility and a clear availability caveat',()=>{
+ const d={...def(),name:'Twilight Screamer EVO Pack',description:'Includes a Batigol Precision Evolution Consumable.',evidence:'catalogue-text' as const};
+ const embed=alertEmbed({id:'1',key:d.key,at:date,type:'added',after:d},'Owner confirmed unreleased on 23 October 2026',[]);
+ assert.match(embed.title,/Twilight Screamer EVO Pack/);assert.match(embed.description,/Check in-game before buying/);
+ assert.ok(embed.fields.some(f=>f.name==='Pack / content details'));assert.ok(embed.fields.some(f=>f.name==='Eligibility'));
+ assert.ok(embed.fields.some(f=>f.name==='Player shortlist'&&f.value.includes('No verified players')));
+ assert.ok(embed.fields.some(f=>f.name==='Evidence'));
 });
 test('asset-root rotations with identical content do not create false changes',()=>{
  const url='https://www.ea.com/ea-sports-fc/ultimate-team/web-app/content/old/2027/fut/loc/companion/futweb/cdn/en-US.json';
