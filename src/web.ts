@@ -17,6 +17,11 @@ import {fodderBoard} from './boards.js';
 import {marketChart} from './chart.js';
 import {errorDetails,logFailure} from './logging.js';
 import {coins,isFresh} from './domain.js';
+import {applyCapture} from './content-watch.js';
+import {report as contentWatchReport} from './content-watch-runner.js';
+import {databaseWatch,readDatabaseWatch,WatchBusy} from './content-watch-store.js';
+import {contentWatchOperator,streamHar,watchSummary,MAX_HAR_BYTES} from './content-watch-upload.js';
+import {Readable} from 'node:stream';
 const root=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
 const cookies=(req:IncomingMessage)=>Object.fromEntries((req.headers.cookie??'').split(';').map(v=>v.trim().split('=')));
 function selectedMarket(value:unknown,fallback:string){if(value===undefined||value===null||value==='')return fallback;if(value==='ps5'||value==='pc')return value;throw new HttpError(400,'Choose PS5/Xbox Console or PC.');}
@@ -30,6 +35,7 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
  const cookie=(name:string,value:string,seconds:number)=>`${name}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${seconds}${secure?'; Secure':''}`;
  const redirectUri=origin+'/auth/callback',rate=new Map<string,{start:number;n:number}>();
  let botUser:any;const botIdentity=async()=>botUser??(botUser=await discord('/users/@me',botToken));
+ let contentUploadBusy=false;
  async function session(req:IncomingMessage){const token=cookies(req)[cookieName];if(!token)throw new HttpError(401,'Sign in with Discord to continue.');const {rows}=await alerts.pool.query('SELECT * FROM futbot_sessions WHERE session_hash=$1 AND expires_at>now()',[hash(token)]);if(!rows[0])throw new HttpError(401,'Your session expired. Sign in again.');return rows[0];}
  async function guilds(s:any,fresh=false){return await discord('/users/@me/guilds?limit=200',decrypt(s.token_cipher,secret!), 'GET',undefined,true,fresh) as any[];}
  async function admin(s:any,id:string,fresh=false){if(!/^\d{17,20}$/.test(id))throw new HttpError(400,'Invalid server ID.');const g=(await guilds(s,fresh)).find(g=>g.id===id);if(!g||!canManage(g))throw new HttpError(403,'Manage Server or Administrator permission is required.');await discord('/guilds/'+id,botToken!,'GET',undefined,false,fresh);return g;}
@@ -60,7 +66,29 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
  }
  if(path.startsWith('/api/')){
  const s=await session(req);if(!['GET','HEAD'].includes(method)){if(req.headers.origin!==origin||!same(String(req.headers['x-csrf-token']??''),s.csrf))throw new HttpError(403,'Request could not be verified. Refresh the page.');}
- if(path==='/api/me'&&method==='GET'){const access=await benefits(alerts.pool,s.user_id);json(res,200,{user:s.profile,csrf:s.csrf,year:prices.year,platform:market.platform,alertLimit:access.alerts,watchLimit:access.watch});return;}
+ if(path==='/api/me'&&method==='GET'){const access=await benefits(alerts.pool,s.user_id);json(res,200,{user:s.profile,csrf:s.csrf,year:prices.year,platform:market.platform,alertLimit:access.alerts,watchLimit:access.watch,contentWatchOperator:contentWatchOperator(s.user_id)});return;}
+ if(path==='/api/content-watch'||path==='/api/content-watch/import'||path==='/api/content-watch/report'){
+  if(!contentWatchOperator(s.user_id))throw new HttpError(403,'This page is private to the configured monitor owner.');
+  if(path==='/api/content-watch'&&method==='GET'){const {state,metadata}=await readDatabaseWatch(alerts.pool,prices.year);json(res,200,watchSummary(state,metadata));return;}
+  if(path==='/api/content-watch/report'&&method==='GET'){const {state}=await readDatabaseWatch(alerts.pool,prices.year);res.writeHead(200,{'Content-Type':'text/markdown; charset=utf-8','Content-Disposition':'attachment; filename="sbc-evo-report.md"','Cache-Control':'no-store'});res.end(contentWatchReport(state,[],market.platform,market.maxAge));return;}
+  if(path==='/api/content-watch/import'&&method==='POST'){
+   if(!/^application\/(?:json|octet-stream)(?:;|$)/i.test(String(req.headers['content-type']??'')))throw new HttpError(415,'Select a HAR file to upload.');
+   if(Number(req.headers['content-length'])>MAX_HAR_BYTES)throw new HttpError(413,'Choose a HAR smaller than 200 MB.');
+   const mode=url.searchParams.get('mode')??'baseline';if(!['baseline','changes'].includes(mode))throw new HttpError(400,'Choose baseline or changes.');
+   if(contentUploadBusy)throw new HttpError(409,'Another capture is being imported. Try again shortly.');
+   contentUploadBusy=true;
+   try{
+    const capture=await streamHar(Readable.from(req.iterator({destroyOnReturn:false})));
+    try{const result=await databaseWatch(alerts.pool,prices.year,async(state,save,metadata)=>{
+     const baseline=mode==='baseline'||!Object.keys(state.records).length,changes=applyCapture(state,capture,baseline);
+     metadata.lastUploadAt=new Date().toISOString();metadata.lastUploadMode=baseline?'baseline':'changes';await save();
+     return {...watchSummary(state,metadata),baseline,changes:changes.length};
+    });json(res,200,result);return;
+    }catch(e){if(e instanceof WatchBusy)throw new HttpError(409,e.message);throw e;}
+   }finally{contentUploadBusy=false;}
+  }
+  throw new HttpError(405,'Method not supported');
+ }
  const extra=await communityRoute({pool:alerts.pool,market,billing,user:s.user_id,path,method,read:()=>body(req),admin:id=>admin(s,id,method!=='GET'),audit:(id,action,details)=>audit(s,id,action,details),memberGuilds:async()=>{const [list,installed]=await Promise.all([guilds(s),discord('/users/@me/guilds?limit=200',botToken!)]);const ids=new Set(installed.map((g:any)=>g.id));return list.filter(g=>ids.has(g.id)).map(g=>({id:g.id,name:g.name}));}});if(extra!==undefined){json(res,200,extra);return;}
  if(path==='/api/logout'&&method==='POST'){await alerts.pool.query('DELETE FROM futbot_sessions WHERE session_hash=$1',[s.session_hash]);res.setHeader('Set-Cookie',cookie(cookieName,'',0));json(res,200,{ok:true});return;}
  if(path==='/api/guilds'&&method==='GET'){const [list,installed]=await Promise.all([guilds(s),discord('/users/@me/guilds?limit=200',botToken!)]);const ids=new Set(installed.map((g:any)=>g.id));json(res,200,{guilds:list.filter(canManage).filter(g=>ids.has(g.id)).map(g=>({id:g.id,name:g.name,icon:g.icon?`https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png`:null}))});return;}

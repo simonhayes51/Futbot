@@ -1,5 +1,61 @@
 # Private EA SBC / Evolution content monitor
 
+## Upload from your browser (recommended on Railway)
+
+The private dashboard now has **SBC & EVO monitor → Upload your HAR**. You do not
+need a terminal, SSH, file transfer, or a HAR stored on Railway's volume.
+
+Set these on both the existing dashboard service and the `leakscanner` worker:
+
+```env
+CONTENT_WATCH_STORE=database
+CONTENT_WATCH_USER_ID=YOUR_DISCORD_USER_ID
+APP_DATABASE_URL=THE_SAME_EXISTING_APPLICATION_DATABASE_URL
+```
+
+Keep `PRICE_DATABASE_URL` separate from `APP_DATABASE_URL`. The dashboard's existing
+Discord OAuth configuration remains required. Sign in using the Discord account
+whose user ID is configured above. Other members and server admins cannot access
+the monitor API or see the upload button.
+
+Use the repository root (`/`, or an empty Root Directory setting) on Railway for
+both services. `/data` is a volume mount path, not this repo's build root: the repo's
+`data` folder contains `gallery-cards.json`, not `package.json`. If Railpack reports
+only that JSON file, correct Root Directory and redeploy. No `start.sh` is needed.
+
+Keep the dashboard's start command `npm run migrate && npm run start:web` (or
+`npm run migrate && npm start` when it runs alongside the bot). Set the worker to:
+
+```bash
+npm run migrate && npm run content:watch -- watch --database --deliver --interval 300
+```
+
+Keep the existing `DISCORD_TOKEN`, `PRICE_DATABASE_URL`, `GAME_YEAR` and `PLATFORM`
+on the worker. A public domain or HTTP healthcheck is not needed for the worker.
+This shared-database setup does not need a shared Railway volume.
+
+Once deployed:
+
+1. Open the existing Futbot dashboard and sign in with Discord.
+2. Choose **SBC & EVO monitor** in the sidebar.
+3. Select your HAR and choose **Set baseline — record without alerts** for setup.
+4. Press **Set up baseline**. The page displays upload progress and content counts.
+5. For future captures select **Compare — queue alerts for changes**.
+
+The first import is automatically silent. The worker reads the saved baseline on
+its next cycle (up to five minutes). The page shows its last successful public poll,
+EVO coverage, pending alerts and recent changes, and provides a content report.
+Uploads are streamed, limited to 200 MB, and parsed one entry at a time. Request
+headers, cookies, auth responses, personal club data and raw captures are not saved.
+Malformed/oversized uploads leave the baseline intact. Public monitoring still does
+not refresh authenticated SBC/EVO definitions without a new browser capture.
+
+## CLI and local file mode
+
+The commands below remain available. With `APP_DATABASE_URL` configured, the worker
+defaults to shared database storage. Set `CONTENT_WATCH_STORE=file` explicitly for
+the local file/volume workflow described below.
+
 This is an operator tool, separate from public Discord commands. It compares EA
 definitions and EVO hints, records when this installation first observed a change,
 and creates a private report. Optional Discord delivery sends only to the configured
