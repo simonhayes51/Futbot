@@ -4,3 +4,6 @@ build/
 *.log
 .flip-test/
 .futgg-context/
+.content-watch/
+*.har
+ea-content-snapshot*.json
