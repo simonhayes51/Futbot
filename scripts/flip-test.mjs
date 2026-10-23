@@ -149,8 +149,8 @@ export function evaluate(card, now) {
   const {h, days, hours, total, partialDays, usable} = historyCoverage(card, now);
   if (!usable) return {reason: 'needs_three_days_history'};
   const medians = days.map(d => median(d.map(p => p.price)));
-  if (medians[0] < medians[1] * 0.97 || medians[1] < medians[2] * 0.97)
-    return {reason: 'declining_trend'};
+  const trend = medians[0] < medians[1] * 0.97 || medians[1] < medians[2] * 0.97 ? 'falling'
+    : medians[0] > medians[1] * 1.03 || medians[1] > medians[2] * 1.03 ? 'rising' : 'flat';
   const prices = days.flat().map(p => p.price);
   const low = quantile(prices, 0.2), typical = median(prices);
   // Unusually large discontinuities need human review, not a bigger score.
@@ -160,7 +160,7 @@ export function evaluate(card, now) {
   // Confirm a material discount from the card's own normal price. Requiring
   // every recent reading to sit within 2.5% of its week-low was an extra gate
   // beyond the margin and stability checks, and filtered out valid dips.
-  if (card.price > typical * 0.94)
+  if (card.price > typical * 0.96)
     return {reason: 'not_a_confirmed_dip'};
   // Conservative target: weakest daily upper quartile, then 2% undercut buffer.
   const target = Math.floor(Math.min(...days.map(d => quantile(d.map(p => p.price), 0.75))) * 0.98 / 100) * 100;
@@ -170,7 +170,7 @@ export function evaluate(card, now) {
   // Count distinct dip -> recovery episodes, with >=2 later hourly readings at target.
   // A 12-hour search limit avoids counting an unrelated recovery days later.
   let episodes = 0, lastEnd = -Infinity;
-  const dipCeiling = Math.min(low * 1.025, typical * 0.94, entry * 1.025);
+  const dipCeiling = Math.min(low * 1.025, typical * 0.96, entry * 1.025);
   for (let i = 0; i < h.length; i++) {
     if (h[i].at <= lastEnd || h[i].price > dipCeiling) continue;
     // A gap cannot establish what happened in between: end this episode at a gap.
@@ -186,7 +186,7 @@ export function evaluate(card, now) {
   // One prior confirmed dip/recovery is enough to show the pattern has repeated.
   // Requiring three within the short history window suppressed every live call.
   if (episodes < 1) return {reason: 'insufficient_repeated_recoveries'};
-  return {reason: 'candidate', entry, target, net, margin: net / entry, episodes,
+  return {reason: 'candidate', entry, target, net, margin: net / entry, episodes, trend,
     historyQuality: partialDays ? 'one_partial_day' : 'complete', observedHours: hours, totalObservedHours: total};
 }
 

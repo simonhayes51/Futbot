@@ -55,11 +55,11 @@ test('one repeated dip qualifies, isolated peaks cannot raise target', () => {
   c.history[50].values = [900_000];
   assert.equal(evaluate(c, now).target, baseline.target);
 });
-test('a stable 6%+ discount can qualify without being almost exactly at the weekly low', () => {
+test('a stable 4%+ discount can qualify without being almost exactly at the weekly low', () => {
   const c = card();
-  c.history = c.history.map(point => ({...point, values: point.values.map(value => value === 92_000 ? 92_000 : 112_000)}));
-  c.recent = [31, 16, 1].map(m => ({at: now - m * 60_000, price: 95_000}));
-  c.price = 95_000;
+  c.history = c.history.map((point, i) => ({...point, values: [i % 2 === 0 ? 92_000 : 112_000]}));
+  c.recent = [31, 16, 1].map(m => ({at: now - m * 60_000, price: 97_000}));
+  c.price = 97_000;
   const result = evaluate(c, now);
   assert.equal(result.reason, 'candidate');
   assert.ok(result.net / result.entry >= 0.05);
@@ -155,10 +155,11 @@ test('Discord publisher deduplicates calls and refuses a channel visible to ever
       {status: 200, headers: {'Content-Type': 'application/json'}})});
   assert.deepEqual(verifiedWithoutSignal, {enabled: true, channelVerified: true, posted: 0, pending: 0, error: null});
 });
-test('rejects falling trends, thin history, unstable prices and stale confirmations', () => {
+test('allows a falling card trend but rejects thin history, unstable prices and stale confirmations', () => {
   const c = card();
   for (const p of c.history) if (p.at < now - 48 * H) p.values = p.values.map(v => v * 1.2);
-  assert.equal(evaluate(c, now).reason, 'declining_trend');
+  assert.equal(evaluate(c, now).reason, 'candidate');
+  assert.equal(evaluate(c, now).trend, 'falling');
   assert.equal(evaluate({...card(), history: []}, now).reason, 'needs_three_days_history');
   const bad = card(); bad.recent[0].price = 105_000;
   assert.equal(evaluate(bad, now).reason, 'unstable_or_anomalous_price');
