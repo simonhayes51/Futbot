@@ -9,7 +9,8 @@
     "start": "node --import tsx src/index.ts",
     "migrate": "node --import tsx src/migrate.ts",
     "build:site": "python3 scripts/build-marketing.py",
-    "start:web": "node --import tsx src/web-entry.ts"
+    "start:web": "node --import tsx src/web-entry.ts",
+    "content:watch": "node --import tsx src/content-watch-runner.ts"
   },
   "dependencies": {
     "discord.js": "^14.25.0",
