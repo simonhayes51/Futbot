@@ -16,7 +16,7 @@ the same `simonhayes51/Futbot` repository, named `ea-browser` for clarity.
 | Root Directory | `/` (repository root) |
 | Branch | `main` after merging this change |
 | `RAILWAY_DOCKERFILE_PATH` | `Dockerfile.ea-browser` |
-| Start command | `npm run migrate && npm run content:browser` |
+| Start command | `/bin/sh -c 'npm run migrate && exec npm run content:browser'` |
 | Volume mount | `/data` |
 | Public domain | None — use the existing dashboard |
 | HTTP healthcheck | None — this is a worker |
