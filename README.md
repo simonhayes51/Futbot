@@ -155,3 +155,7 @@ An optional operator worker monitors EA's public catalogue/localisation files an
 compares imported SBC/EVO definitions. It records requirement changes, checks exact
 card eligibility and fresh prices, and can send private Discord alerts.
 See [setup and limitations](scripts/content-watch.md).
+
+An optional [automatic EA browser worker](scripts/automatic-ea-browser.md) can collect
+authenticated SBC/EVO definitions and provides owner-only phone login controls.
+It requires a separate Chromium container and a live login pilot on Railway.

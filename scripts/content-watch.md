@@ -1,5 +1,9 @@
 # Private EA SBC / Evolution content monitor
 
+For scheduled authenticated collection without HAR uploads, see
+[automatic EA browser setup](automatic-ea-browser.md). It adds a private iPhone-friendly
+login view to the same dashboard. A live EA/Railway login test is still required.
+
 ## Upload from your browser (recommended on Railway)
 
 The private dashboard now has **SBC & EVO monitor → Upload your HAR**. You do not

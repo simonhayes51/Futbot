@@ -1,0 +1,13 @@
+.git
+node_modules
+.env
+.env.*
+!.env.example
+*.har
+**/*.har
+.content-watch
+.ea-browser
+.flip-test
+.futgg-context
+upload
+*.log

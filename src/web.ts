@@ -22,6 +22,7 @@ import {report as contentWatchReport} from './content-watch-runner.js';
 import {databaseWatch,readDatabaseWatch,WatchBusy} from './content-watch-store.js';
 import {contentWatchOperator,streamHar,watchSummary,MAX_HAR_BYTES} from './content-watch-upload.js';
 import {Readable} from 'node:stream';
+import {browserAction,browserSecret,browserStatus,browserFrame,enqueueBrowserAction} from './ea-browser-control.js';
 const root=resolve(fileURLToPath(new URL('../dist/',import.meta.url)));
 const cookies=(req:IncomingMessage)=>Object.fromEntries((req.headers.cookie??'').split(';').map(v=>v.trim().split('=')));
 function selectedMarket(value:unknown,fallback:string){if(value===undefined||value===null||value==='')return fallback;if(value==='ps5'||value==='pc')return value;throw new HttpError(400,'Choose PS5/Xbox Console or PC.');}
@@ -67,6 +68,19 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
  if(path.startsWith('/api/')){
  const s=await session(req);if(!['GET','HEAD'].includes(method)){if(req.headers.origin!==origin||!same(String(req.headers['x-csrf-token']??''),s.csrf))throw new HttpError(403,'Request could not be verified. Refresh the page.');}
  if(path==='/api/me'&&method==='GET'){const access=await benefits(alerts.pool,s.user_id);json(res,200,{user:s.profile,csrf:s.csrf,year:prices.year,platform:market.platform,alertLimit:access.alerts,watchLimit:access.watch,contentWatchOperator:contentWatchOperator(s.user_id)});return;}
+ if(/^\/api\/content-watch\/browser(?:\/frame|\/command)?$/.test(path)){
+  if(!contentWatchOperator(s.user_id))throw new HttpError(403,'This connection is private to the monitor owner.');
+  if(path==='/api/content-watch/browser'&&method==='GET'){json(res,200,await browserStatus(alerts.pool,prices.year));return;}
+  if(path==='/api/content-watch/browser/frame'&&method==='GET'){json(res,200,await browserFrame(alerts.pool,prices.year,browserSecret()));return;}
+  if(path==='/api/content-watch/browser/command'&&method==='POST'){
+   const action=browserAction(await body(req));const id=await enqueueBrowserAction(alerts.pool,prices.year,action,browserSecret());json(res,200,{id});return;
+  }
+  if(path==='/api/content-watch/browser/command'&&method==='GET'){
+   const id=url.searchParams.get('id');if(!/^[a-f0-9-]{36}$/.test(id??''))throw new HttpError(400,'Invalid browser command.');
+   const {rows}=await alerts.pool.query('SELECT state,error FROM futbot_ea_browser_commands WHERE id=$1 AND game_year=$2',[id,prices.year]);if(!rows[0])throw new HttpError(404,'Browser command not found.');json(res,200,rows[0]);return;
+  }
+  throw new HttpError(405,'Method not supported');
+ }
  if(path==='/api/content-watch'||path==='/api/content-watch/import'||path==='/api/content-watch/report'){
   if(!contentWatchOperator(s.user_id))throw new HttpError(403,'This page is private to the configured monitor owner.');
   if(path==='/api/content-watch'&&method==='GET'){const {state,metadata}=await readDatabaseWatch(alerts.pool,prices.year);json(res,200,watchSummary(state,metadata));return;}
