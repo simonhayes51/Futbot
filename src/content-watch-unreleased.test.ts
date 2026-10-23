@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {applyCapture,emptyState,makeCapture,definitions,type Definition} from './content-watch.js';
 import {assessRelease,unreleasedReason,queueUnreleased} from './content-watch-unreleased.js';
-import {deliverPending,report} from './content-watch-runner.js';
+import {deliverPending,report,needsMarketPlayers} from './content-watch-runner.js';
 import {watchSummary} from './content-watch-upload.js';
 const now=Date.parse('2026-10-23T12:00:00Z');
 const xmlUrl='https://www.ea.com/ea-sports-fc/ultimate-team/web-app/content/AAA/2027/fut/packs/loc/storepackdescriptions.en_us.xml';
@@ -37,3 +37,11 @@ test('unreleased confirmations expire and future timestamps stop qualifying at r
 });
 
 test('release assessment rejects inherited object keys',()=>{const {state}=fixture();assert.throws(()=>assessRelease(state,'__proto__','unreleased'),/not found/);});
+
+test('public catalogue cycles skip market reads even with delivery enabled; explicit reports retain the option',()=>{
+ const {state}=fixture();assessRelease(state,'evo-clue:pack-20304','unreleased');
+ assert.equal(needsMarketPlayers(state,'watch',true),false);assert.equal(needsMarketPlayers(state,'deliver'),false);assert.equal(needsMarketPlayers(state,'poll'),false);assert.equal(needsMarketPlayers(state,'report'),true);
+ const d:Definition={key:'evo:future',kind:'evo',id:'future',name:'Future EVO',description:'',source:'/academy/hub/v2',rules:[{attribute:'OVR',scope:'max',targets:[81]}],details:{},evidence:'served-definition',release:Math.floor(Date.now()/1000)+3600};
+ state.records[d.key]={definition:d,hash:'future',firstSeen:new Date().toISOString(),lastSeen:new Date().toISOString()};queueUnreleased(state);
+ assert.equal(needsMarketPlayers(state,'watch',true),true);assert.equal(needsMarketPlayers(state,'watch'),false);state.events.forEach(e=>e.delivered=true);assert.equal(needsMarketPlayers(state,'watch',true),false);
+});

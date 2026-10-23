@@ -47,6 +47,13 @@ export function changeMessage(event:Change,releaseBasis?:string):string{
  if(d.kind==='sbc-challenge')lines.push('SBC requirements: '+JSON.stringify(d.details.rawRequirements).slice(0,600));
  lines.push('Evidence: '+d.source,'Candidate signal only. No profit or release guarantee.');return lines.filter(Boolean).join('\n').slice(0,1900);
 }
+// Catalogue text has incomplete eligibility; fetching every player's price cannot
+// turn it into a verified shortlist. Only load prices when there is useful work.
+export function needsMarketPlayers(state:WatchState,command:string,deliver=false):boolean{
+ if(command==='report')return true;
+ if(command!=='deliver'&&!deliver)return false;
+ return state.events.some(e=>!e.delivered&&isUnreleasedEvent(state,e)&&e.after.kind==='evo'&&e.after.evidence==='served-definition'&&e.after.rules.length>0);
+}
 export async function deliverPending(state:WatchState,send:(event:Change)=>Promise<void>,save:()=>Promise<void>):Promise<number>{
  let sent=0;for(const event of state.events.filter(e=>!e.delivered)){if(!isUnreleasedEvent(state,event))continue;await send(event);event.delivered=true;await save();sent++;}return sent;
 }
@@ -94,7 +101,9 @@ async function run():Promise<void>{
  let stopped=false;process.once('SIGINT',()=>{stopped=true;});process.once('SIGTERM',()=>{stopped=true;});
  let wake:(()=>void)|undefined;const signalStop=()=>wake?.();process.once('SIGINT',signalStop);process.once('SIGTERM',signalStop);
  const withState=async(work:(state:WatchState,save:()=>Promise<void>,metadata:WatchMetadata)=>Promise<void>)=>appPool?databaseWatch(appPool,year,work):withLock(dir,async()=>{const state=await loadState(dir,year);return work(state,()=>atomicJson(join(dir,'state.json'),state),{});});
- async function cycle(){await withState(async(state,save,metadata)=>{
+ let stage='loading application content state';
+ async function cycle(){stage='loading application content state';await withState(async(state,save,metadata)=>{
+  stage='preparing capture';
   if(values.url){for(const url of values.url)if(!publicContentUrl(url))throw new Error('Unsupported public URL');state.publicUrls=[...new Set([...state.publicUrls,...values.url])];}
   let capture:Capture|undefined;
   if(command==='import'){
@@ -107,18 +116,23 @@ async function run():Promise<void>{
   }else if(command==='poll'||command==='watch'){
    if(!state.publicUrls.length)throw new Error('Import a startup HAR first, or supply --url with a supported public content URL');
    // A failed source aborts this scan; it does not replace state with an error page.
+   stage='fetching public content files';
    const docs:Document[]=[];for(const url of state.publicUrls)docs.push(await fetchPublic(url));capture=makeCapture(docs,state.publicUrls);
   }
+  stage='saving content capture';
   if(capture){const fresh=Object.keys(state.records).length===0;const changes=applyCapture(state,capture,Boolean(values.baseline)||fresh);if(command==='poll'||command==='watch'){metadata.lastPublicPollAt=new Date().toISOString();metadata.lastPollError=null;}await save();console.log(JSON.stringify({definitions:Object.keys(state.records).length,changes:changes.length,baseline:Boolean(values.baseline)||fresh,coverage:state.coverage}));}
-  queueUnreleased(state);await save();
+  stage='saving unreleased alert queue';queueUnreleased(state);await save();
+  stage='loading optional player feed';
   let players:Player[]=values.players?JSON.parse(await readFile(values.players,'utf8')):[];if(!Array.isArray(players))throw new Error('Player feed must be a JSON array');
-  if(values.database){if(values.players)throw new Error('Choose --players or --database');if(!process.env.PRICE_DATABASE_URL)throw new Error('--database requires PRICE_DATABASE_URL');const repo=new PriceRepository(process.env.PRICE_DATABASE_URL,year);try{players=await readMarketPlayers(repo.pool,year,platform,maxAge);}finally{await repo.pool.end();}}
+  if(values.database){if(values.players)throw new Error('Choose --players or --database');if(needsMarketPlayers(state,command,Boolean(values.deliver))){stage='reading player-price database';if(!process.env.PRICE_DATABASE_URL)throw new Error('--database requires PRICE_DATABASE_URL');const repo=new PriceRepository(process.env.PRICE_DATABASE_URL,year);try{players=await readMarketPlayers(repo.pool,year,platform,maxAge);}finally{await repo.pool.end();}}else console.log('Skipped player-price lookup: no verified shortlist needed for this content cycle.');}
+  stage='writing content report';
   if(!appPool){await writeFile(join(dir,'report.md'),report(state,players,platform,maxAge),{mode:0o600});}
+  stage='delivering unreleased alerts';
   if(command==='deliver'||values.deliver){const userId=process.env.CONTENT_WATCH_USER_ID,token=process.env.DISCORD_TOKEN;if(!userId||!token)throw new Error('Private delivery requires CONTENT_WATCH_USER_ID and DISCORD_TOKEN');
    const pending=state.events.some(e=>!e.delivered&&isUnreleasedEvent(state,e));if(pending){const send=await discordSender(userId,token,players,state,platform,year,maxAge);console.log('Delivered '+await deliverPending(state,send,save)+' private alerts');}}
   console.log(appPool?'Content watch state saved in the application database.':'Report: '+join(dir,'report.md'));
  });}
- try{do{try{await cycle();}catch(e){if(command!=='watch')throw e;console.error('Content watch scan failed: '+(e instanceof Error?e.message:'unknown error'));}
+ try{do{try{await cycle();}catch(e){if(command!=='watch')throw e;console.error('Content watch scan failed during '+stage+': '+(e instanceof Error?e.message:'unknown error'));}
   if(command!=='watch'||stopped)break;await new Promise<void>(done=>{const timer=setTimeout(done,interval*1000);wake=()=>{clearTimeout(timer);done();};});wake=undefined;
  }while(!stopped);}finally{await appPool?.end();}
 }

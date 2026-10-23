@@ -45,3 +45,18 @@ Deploy the same change to the dashboard, leakscanner and (if retained) EA browse
 worker so they share the content types and filtering. Keep the scanner's existing
 watch command and shared APP_DATABASE_URL. No EA login or fresh HAR is needed to
 recheck the public URLs already saved in the baseline.
+
+## Public-file worker start command
+
+```sh
+npm run content:watch -- watch --deliver --interval 300
+```
+
+Do not add `--database` just to save content in PostgreSQL. `CONTENT_WATCH_STORE=database`
+and `APP_DATABASE_URL` already select the application store. The CLI `--database`
+flag requests player-price enrichment from `PRICE_DATABASE_URL`; it is unnecessary
+for partial catalogue clues and can trigger a large lateral history query. Existing
+commands containing the flag now skip that query unless a pending future EVO can
+use a verified shortlist, or an explicit report was requested. The flag can simply
+be removed for public-file discovery. Timeout logs identify which stage failed;
+a timeout loading or saving application state is a separate issue from price reads.
