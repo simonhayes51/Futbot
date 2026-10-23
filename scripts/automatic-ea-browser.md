@@ -82,7 +82,13 @@ The browser profile persists on `/data`. On restart it can reuse login cookies a
 local state, then obtains a fresh UT session through the normal web-app load. On an
 expired UT session it tries one normal reload. If EA requires a new login, verification
 or blocks access, collection pauses and shows **Reconnect needed**. Rate limits also
-pause collection; wait before manually restarting. No fixed login lifetime is promised.
+pause collection. The worker honors EA's Retry-After header (seconds or HTTP date),
+with a minimum one-minute wait; if none is supplied it uses a conservative 30-minute
+fallback, not a known EA reset window. The cooldown persists across restarts and
+blocks Start / check now until it expires. Checks stay paused afterwards until you
+restart them manually. Content requests are spaced at least 1.5 seconds apart and
+each scan is bounded to 180 seconds; the first request can still be rate limited
+and this does not guarantee acceptance by EA. No fixed login lifetime is promised.
 
 **Pause checks** stops scheduled reads without forgetting the browser profile.
 **Close view** hides the private screen without deleting login data. **Disconnect &

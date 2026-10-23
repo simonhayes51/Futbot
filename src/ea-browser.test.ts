@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {JSDOM} from 'jsdom';
-import {EACollector,EACollectionFailure,collectionFailureMessage,EAAuthRequired,EARateLimited,UT_ORIGIN,allowedEAPage,contentPath,browserInput} from './ea-browser-collector.js';
+import {EACollector,retryAfterDelay,EACollectionFailure,collectionFailureMessage,EAAuthRequired,EARateLimited,UT_ORIGIN,allowedEAPage,contentPath,browserInput} from './ea-browser-collector.js';
 import {allowedUTRequest} from './ea-browser-worker.js';
 import {browserAction,browserFrame,browserStatus,enqueueBrowserAction} from './ea-browser-control.js';
 import {encrypt,decrypt,hash} from './auth.js';
@@ -18,7 +18,7 @@ async function collectorFixture(failStatus=0,emptySecondPage=false){
   else if(url.includes('/sbs/setId/'))body={challenges:[{challengeId:4,setId:3,name:'Challenge',elgReq:[]}]};
   else if(url.endsWith('/academy/hub/v2'))body={categories:[{id:37,count:36,slotIds:Array.from({length:36},(_,i)=>i+1)}],slots:[]};
   else{const offset=Number(new URL(url).searchParams.get('offset'));body={slots:Array.from({length:offset?(emptySecondPage?0:16):20},(_,i)=>({id:offset+i+1,slotName:'EVO '+(offset+i),elgReqs:[],levels:[],randomPlayerPreview:{SECRET:'club'}}))};}
-  return {status:()=>failStatus||200,ok:()=>!failStatus,json:async()=>body,dispose:async()=>{disposals++;}};
+  return {headers:()=>({'retry-after':'120'}),status:()=>failStatus||200,ok:()=>!failStatus,json:async()=>body,dispose:async()=>{disposals++;}};
  }}};
  const collector=new EACollector(context,27,0);collector.observe();
  await handlers.response({url:()=>UT_ORIGIN+'/ut/auth',status:()=>200,json:async()=>({sid:'PRIVATE_SESSION'})});await new Promise(r=>setImmediate(r));
@@ -33,7 +33,7 @@ test('expired sessions pause collection without exporting or retaining the sessi
  const f=await collectorFixture(401);await assert.rejects(f.collector.scan(),EAAuthRequired);assert.equal(f.collector.hasSession(),false);assert.equal(f.disposals(),1);await assert.rejects(f.collector.scan(),EAAuthRequired);assert.equal(f.calls.length,1);
 });
 test('rate limits and incomplete pages abort rather than produce partial snapshots',async()=>{
- const limited=await collectorFixture(429);await assert.rejects(limited.collector.scan(),EARateLimited);assert.equal(limited.calls.length,1);assert.equal(limited.disposals(),1);
+ const limited=await collectorFixture(429);await assert.rejects(limited.collector.scan(),e=>{assert.ok(e instanceof EARateLimited);assert.equal(e.retryAfterMs,120000);assert.equal(e.endpoint,'/sbs/hub/v2');return true;});assert.equal(limited.calls.length,1);assert.equal(limited.disposals(),1);
  const partial=await collectorFixture(0,true);await assert.rejects(partial.collector.scan(),/Incomplete EVO page/);
 });
 test('navigation and UT write restrictions prevent trades, submissions and arbitrary URLs',()=>{
@@ -79,4 +79,32 @@ test('collector reports safe HTTP and transport diagnostics without leaking resp
  assert.equal(collectionFailureMessage(new EACollectionFailure('Unexpected EVO hub response.')),'Unexpected EVO hub response.');
  const transport=await collectorFixture();(transport.collector as any).context.request.get=async()=>{throw new Error('Authorization PRIVATE_SESSION');};
  await assert.rejects(transport.collector.scan(),e=>{assert.match(collectionFailureMessage(e),/timed out at \/sbs\/hub\/v2/);assert.doesNotMatch(collectionFailureMessage(e),/Authorization|PRIVATE_SESSION/);return true;});
+});
+
+test('EA retry timing honors seconds and HTTP dates with a conservative missing-header fallback',()=>{
+ const now=Date.parse('2026-10-23T10:00:00Z');
+ assert.equal(retryAfterDelay('120',now),120000);
+ assert.equal(retryAfterDelay('Fri, 23 Oct 2026 10:05:00 GMT',now),300000);
+ assert.equal(retryAfterDelay(undefined,now),1800000);assert.equal(retryAfterDelay('invalid',now),1800000);
+ assert.equal(retryAfterDelay('0',now),60000);
+});
+test('EA cooldown survives commands and restarts and blocks scan attempts without blocking pause',async()=>{
+ const {pool,db}=await testDatabase();try{
+  await pool.query("INSERT INTO futbot_ea_browser(game_year,heartbeat_at,rate_limit_until) VALUES(27,now(),now()+interval '30 minutes')");
+  assert.ok((await browserStatus(pool,27)).rate_limit_until);
+  await assert.rejects(enqueueBrowserAction(pool,27,{action:'scan'},secret),/cooldown/);
+  assert.ok(await enqueueBrowserAction(pool,27,{action:'pause'},secret));
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM futbot_ea_browser_commands WHERE action='scan'")).rows[0].n,0);
+  await pool.query("UPDATE futbot_ea_browser SET rate_limit_until=now()-interval '1 minute'");assert.ok(await enqueueBrowserAction(pool,27,{action:'scan'},secret));
+ }finally{await db.close();}
+});
+
+test('phone panel displays the cooldown and disables new scans',async()=>{
+ const dom=new JSDOM('<main></main>',{url:'https://futbot.test/app/',runScripts:'outside-only'});try{
+  const w=dom.window as any;w.eval(await readFile(new URL('../dist/app/ea-browser.js',import.meta.url),'utf8'));
+  w.document.querySelector('main').innerHTML=await w.FutbotEABrowser.render(async()=>({phase:'paused',online:true,rate_limit_until:new Date(Date.now()+300000).toISOString()}));
+  assert.match(w.document.querySelector('#ea-browser-cooldown').textContent,/minute\(s\) remaining/);
+  assert.equal(w.document.querySelector('[data-ea-action="scan"]').disabled,true);
+  assert.equal(w.document.querySelector('[data-ea-action="pause"]').disabled,false);
+ }finally{dom.window.close();}
 });
