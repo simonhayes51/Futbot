@@ -1,3 +1,5 @@
+> Current alert policy: only confirmed unreleased content or future EA release timestamps qualify. See [unreleased-content.md](unreleased-content.md). Live-item observations remain in storage but are excluded from delivery and the main feed.
+
 # Private EA SBC / Evolution content monitor
 
 For scheduled authenticated collection without HAR uploads, see

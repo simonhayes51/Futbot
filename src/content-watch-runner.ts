@@ -1,3 +1,4 @@
+import {isUnreleasedEvent,unreleasedRecords,unreleasedReason,queueUnreleased} from './content-watch-unreleased.js';
 import 'dotenv/config';
 import {mkdir,readFile,writeFile,rename,rm,open} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
@@ -40,16 +41,16 @@ function status(d:Definition,now=Date.now()):string{
  if(d.expires&&d.expires*1000<=now)return 'EXPIRED DEFINITION';
  return 'SERVED DEFINITION — advance availability unproven';
 }
-export function changeMessage(event:Change):string{
- const d=event.after;const lines=[`${event.type==='added'?'New':'Changed'} ${d.kind}: ${d.name}`,status(d),`First observed change: ${event.at}`,d.description.slice(0,700),...d.rules.slice(0,10).map(ruleText)];
+export function changeMessage(event:Change,releaseBasis?:string):string{
+ const d=event.after;const lines=[`Unreleased content ${event.type==='added'?'found':'updated'}: ${d.name}`,releaseBasis??status(d),`First observed change: ${event.at}`,d.description.slice(0,700),...d.rules.slice(0,10).map(ruleText)];
  if(event.before)lines.push('Changed fields: '+['name','description','rules','details','release','expires'].filter(k=>JSON.stringify((event.before as any)[k])!==JSON.stringify((d as any)[k])).join(', '));
  if(d.kind==='sbc-challenge')lines.push('SBC requirements: '+JSON.stringify(d.details.rawRequirements).slice(0,600));
  lines.push('Evidence: '+d.source,'Candidate signal only. No profit or release guarantee.');return lines.filter(Boolean).join('\n').slice(0,1900);
 }
 export async function deliverPending(state:WatchState,send:(event:Change)=>Promise<void>,save:()=>Promise<void>):Promise<number>{
- let sent=0;for(const event of state.events.filter(e=>!e.delivered)){await send(event);event.delivered=true;await save();sent++;}return sent;
+ let sent=0;for(const event of state.events.filter(e=>!e.delivered)){if(!isUnreleasedEvent(state,event))continue;await send(event);event.delivered=true;await save();sent++;}return sent;
 }
-async function discordSender(userId:string,token:string,players:Player[],platform:string,year:number,maxAge:number):(Promise<(event:Change)=>Promise<void>>){
+async function discordSender(userId:string,token:string,players:Player[],state:WatchState,platform:string,year:number,maxAge:number):(Promise<(event:Change)=>Promise<void>>){
  if(!/^\d{17,20}$/.test(userId))throw new Error('CONTENT_WATCH_USER_ID must be your Discord user ID');
  async function request(path:string,body:unknown){
   const r=await fetch('https://discord.com/api/v10'+path,{method:'POST',headers:{authorization:'Bot '+token,'content-type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
@@ -60,14 +61,14 @@ async function discordSender(userId:string,token:string,players:Player[],platfor
  return async event=>{
   const matches=shortlist(event.after,players,platform,year,maxAge).filter(m=>m.result==='eligible'&&m.player.price!==undefined).slice(0,5);
   const picks=matches.length?'\nVerified eligible, fresh prices:\n'+matches.map(m=>`${m.player.name}: ${m.player.price!.toLocaleString('en-GB')} coins`).join('\n'):'\nNo fully verified shortlist with fresh prices available.';
-  await request(`/channels/${channel.id}/messages`,{content:changeMessage(event).slice(0,1500)+picks.slice(0,450),allowed_mentions:{parse:[]},nonce:event.id.slice(0,24),enforce_nonce:true});
+  await request(`/channels/${channel.id}/messages`,{content:changeMessage(event,unreleasedReason(state,event.after)).slice(0,1500)+picks.slice(0,450),allowed_mentions:{parse:[]},nonce:event.id.slice(0,24),enforce_nonce:true});
  };
 }
 export function report(state:WatchState,players:Player[],platform:string,maxAge:number):string{
- const lines=[`# SBC and EVO content watch — FC${state.gameYear}`,`Last scan: ${state.lastRun??'never'}`,`EVO definitions captured: ${state.coverage?.evoFetched??0}/${state.coverage?.evoExpected??0}. Missing pages are not unreleased EVOs.`,
-  'Catalogue clues may be old, targeted or unreleased. First seen means first seen by this monitor. Prices do not predict demand or profit.',''];
- const rows=Object.values(state.records).sort((a,b)=>(b.definition.kind==='evo-clue'?1:0)-(a.definition.kind==='evo-clue'?1:0)||b.firstSeen.localeCompare(a.firstSeen));
- for(const row of rows){const d=row.definition;lines.push(`## ${d.name.replace(/[\r\n]/g,' ')} (${d.key})`,status(d),`First seen: ${row.firstSeen} · Last seen: ${row.lastSeen}`,d.description,...d.rules.map(r=>'- '+ruleText(r)));
+ const lines=[`# Unreleased content — FC${state.gameYear}`,`Last scan: ${state.lastRun??'never'}`,`EVO definitions captured: ${state.coverage?.evoFetched??0}/${state.coverage?.evoExpected??0}. Missing pages are not unreleased EVOs.`,
+  'Only items with a current unreleased confirmation or future EA release timestamp are listed. First seen is the observation time, not a release time.',''];
+ const rows=unreleasedRecords(state).sort((a,b)=>(b.definition.kind==='evo-clue'?1:0)-(a.definition.kind==='evo-clue'?1:0)||b.firstSeen.localeCompare(a.firstSeen));
+ for(const row of rows){const d=row.definition;lines.push(`## ${d.name.replace(/[\r\n]/g,' ')} (${d.key})`,unreleasedReason(state,d)??status(d),`First seen: ${row.firstSeen} · Last seen: ${row.lastSeen}`,d.description,...d.rules.map(r=>'- '+ruleText(r)));
   if(d.kind==='sbc-challenge')lines.push('EA squad requirements: '+JSON.stringify(d.details.rawRequirements));
   if(d.kind==='evo')lines.push('EA level upgrades: '+JSON.stringify(d.details.levels));
   if(d.kind==='evo'||d.kind==='evo-clue'){
@@ -109,11 +110,12 @@ async function run():Promise<void>{
    const docs:Document[]=[];for(const url of state.publicUrls)docs.push(await fetchPublic(url));capture=makeCapture(docs,state.publicUrls);
   }
   if(capture){const fresh=Object.keys(state.records).length===0;const changes=applyCapture(state,capture,Boolean(values.baseline)||fresh);if(command==='poll'||command==='watch'){metadata.lastPublicPollAt=new Date().toISOString();metadata.lastPollError=null;}await save();console.log(JSON.stringify({definitions:Object.keys(state.records).length,changes:changes.length,baseline:Boolean(values.baseline)||fresh,coverage:state.coverage}));}
+  queueUnreleased(state);await save();
   let players:Player[]=values.players?JSON.parse(await readFile(values.players,'utf8')):[];if(!Array.isArray(players))throw new Error('Player feed must be a JSON array');
   if(values.database){if(values.players)throw new Error('Choose --players or --database');if(!process.env.PRICE_DATABASE_URL)throw new Error('--database requires PRICE_DATABASE_URL');const repo=new PriceRepository(process.env.PRICE_DATABASE_URL,year);try{players=await readMarketPlayers(repo.pool,year,platform,maxAge);}finally{await repo.pool.end();}}
   if(!appPool){await writeFile(join(dir,'report.md'),report(state,players,platform,maxAge),{mode:0o600});}
   if(command==='deliver'||values.deliver){const userId=process.env.CONTENT_WATCH_USER_ID,token=process.env.DISCORD_TOKEN;if(!userId||!token)throw new Error('Private delivery requires CONTENT_WATCH_USER_ID and DISCORD_TOKEN');
-   const pending=state.events.some(e=>!e.delivered);if(pending){const send=await discordSender(userId,token,players,platform,year,maxAge);console.log('Delivered '+await deliverPending(state,send,save)+' private alerts');}}
+   const pending=state.events.some(e=>!e.delivered&&isUnreleasedEvent(state,e));if(pending){const send=await discordSender(userId,token,players,state,platform,year,maxAge);console.log('Delivered '+await deliverPending(state,send,save)+' private alerts');}}
   console.log(appPool?'Content watch state saved in the application database.':'Report: '+join(dir,'report.md'));
  });}
  try{do{try{await cycle();}catch(e){if(command!=='watch')throw e;console.error('Content watch scan failed: '+(e instanceof Error?e.message:'unknown error'));}

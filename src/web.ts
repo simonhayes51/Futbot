@@ -1,3 +1,4 @@
+import {assessRelease} from './content-watch-unreleased.js';
 import {communityRoute,benefits} from './community.js';
 import {Billing} from './billing.js';
 import {requireServerPlan} from './plans.js';
@@ -81,8 +82,12 @@ export function createWeb(prices:PriceRepository,alerts:AlertRepository,market:M
   }
   throw new HttpError(405,'Method not supported');
  }
- if(path==='/api/content-watch'||path==='/api/content-watch/import'||path==='/api/content-watch/report'){
+ if(path==='/api/content-watch'||path==='/api/content-watch/import'||path==='/api/content-watch/report'||path==='/api/content-watch/release-status'){
   if(!contentWatchOperator(s.user_id))throw new HttpError(403,'This page is private to the configured monitor owner.');
+  if(path==='/api/content-watch/release-status'&&method==='POST'){
+   const input=await body(req);if(typeof input.key!=='string'||!['unreleased','released','ignore'].includes(input.status))throw new HttpError(400,'Choose a content item and release status.');
+   try{const result=await databaseWatch(alerts.pool,prices.year,async(state,save,metadata)=>{if(!Object.hasOwn(state.records,input.key))throw new HttpError(404,'Content record not found.');assessRelease(state,input.key,input.status);await save();return watchSummary(state,metadata);});json(res,200,result);return;}catch(e){if(e instanceof WatchBusy)throw new HttpError(409,e.message);throw e;}
+  }
   if(path==='/api/content-watch'&&method==='GET'){const {state,metadata}=await readDatabaseWatch(alerts.pool,prices.year);json(res,200,watchSummary(state,metadata));return;}
   if(path==='/api/content-watch/report'&&method==='GET'){const {state}=await readDatabaseWatch(alerts.pool,prices.year);res.writeHead(200,{'Content-Type':'text/markdown; charset=utf-8','Content-Disposition':'attachment; filename="sbc-evo-report.md"','Cache-Control':'no-store'});res.end(contentWatchReport(state,[],market.platform,market.maxAge));return;}
   if(path==='/api/content-watch/import'&&method==='POST'){

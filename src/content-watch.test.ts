@@ -61,7 +61,7 @@ test('public fetch allowlist rejects authenticated endpoints, lookalike hosts an
  await assert.rejects(fetchPublic(good,(async()=>new Response('<html>error</html>')) as typeof fetch));
 });
 test('outbox retries failed delivery and remembers successful alerts',async()=>{
- const state=emptyState();applyCapture(state,capture());let calls=0,saves=0;
+ const state=emptyState();applyCapture(state,capture());state.records['evo:1'].definition.release=Math.floor(Date.now()/1000)+3600;let calls=0,saves=0;
  await assert.rejects(deliverPending(state,async()=>{calls++;throw new Error('offline');},async()=>{saves++;}));assert.equal(state.events[0].delivered,undefined);
  assert.equal(await deliverPending(state,async()=>{calls++;},async()=>{saves++;}),1);assert.equal(await deliverPending(state,async()=>{calls++;},async()=>{saves++;}),0);assert.equal(calls,2);assert.equal(saves,1);
 });
