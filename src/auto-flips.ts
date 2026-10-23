@@ -46,7 +46,7 @@ export async function handleAutoFlips(i:ChatInputCommandInteraction,pool:pg.Pool
  await i.editReply(`✅ Automatic ${platform.toUpperCase()} flips enabled in <#${channel.id}>. FutBot will send new qualifying calls there. Use /autoflips status to check or /autoflips off to stop.`);
 }
 
-export type AutoFlipSignal={id:string;name:string|null;rating:number|null;rarity:string|null;entry:number;target:number;net:number;margin:number;episodes:number;sourceAt:number|string;reason:string};
+export type AutoFlipSignal={id:string;name:string|null;rating:number|null;rarity:string|null;entry:number;target:number;net:number;margin:number;episodes:number;trend?:'falling'|'flat'|'rising';sourceAt:number|string;reason:string};
 export function validAutoFlipSignal(s:AutoFlipSignal){
  return s?.reason==='candidate'&&/^\d+$/.test(String(s.id))&&[s.entry,s.target,s.net,s.margin,s.episodes].every(Number.isFinite)&&
   s.entry>0&&s.target>s.entry&&s.net>=1500&&s.margin>=0.05&&s.episodes>=1&&Number.isFinite(new Date(s.sourceAt).getTime());
@@ -80,7 +80,8 @@ export async function publishAutoFlip(client:Client,row:any,signal:AutoFlipSigna
  const embed=new EmbedBuilder().setColor('#3458ff').setTitle(`📈 BUY IDEA · ${signal.name||'Card '+signal.id}`.slice(0,256))
   .setDescription(`${signal.rating||'—'} · ${signal.rarity||'Player item'} · ${row.platform.toUpperCase()}`)
   .addFields({name:'Buy at or below',value:coins(signal.entry)+' coins',inline:true},{name:'Target BIN',value:coins(signal.target)+' coins',inline:true},
-   {name:'Est. net after 5% tax',value:coins(signal.net)+' coins',inline:true},{name:'Why it qualified',value:`${signal.episodes} confirmed prior recovery · ${(signal.margin*100).toFixed(1)}% estimated margin`})
+   {name:'Est. net after 5% tax',value:coins(signal.net)+' coins',inline:true},{name:'Why it qualified',value:`${signal.episodes} confirmed prior recovery · ${(signal.margin*100).toFixed(1)}% estimated margin`},
+   {name:'3-day card trend',value:signal.trend==='falling'?'Falling · lower confidence':signal.trend==='rising'?'Rising':'Flat/steady',inline:true})
   .setFooter({text:`FutBot · FC${row.game_year} · BIN observations · check the market before buying`}).setTimestamp(new Date(signal.sourceAt));
  const nonce=createHash('sha256').update(row.signal_key+':'+row.guild_id).digest('hex').slice(0,24);
  const message=await channel.send({embeds:[embed],allowedMentions:{parse:[]},nonce,enforceNonce:true});return message.id;
