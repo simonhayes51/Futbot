@@ -18,14 +18,15 @@ export function browserAction(raw:any):BrowserAction{
 }
 export function browserSecret():string{const value=process.env.SESSION_SECRET;if(!value||value.length<32)throw new HttpError(503,'Configure the same SESSION_SECRET on the dashboard and EA browser worker.');return value;}
 export async function browserStatus(pool:Pick<pg.Pool,'query'>,year:number){
- const {rows}=await pool.query('SELECT phase,auto_enabled,heartbeat_at,interactive_until,frame_at,last_scan_at,last_error FROM futbot_ea_browser WHERE game_year=$1',[year]);
+ const {rows}=await pool.query('SELECT phase,auto_enabled,heartbeat_at,interactive_until,frame_at,last_scan_at,last_error,rate_limit_until FROM futbot_ea_browser WHERE game_year=$1',[year]);
  const row=rows[0];return row?{...row,online:row.heartbeat_at&&Date.now()-new Date(row.heartbeat_at).getTime()<45000}:{phase:'disconnected',online:false,auto_enabled:false};
 }
 export async function enqueueBrowserAction(pool:Pick<pg.Pool,'connect'>,year:number,action:BrowserAction,secret:string):Promise<string>{
  const c=await pool.connect();try{
   await c.query('BEGIN');await c.query('SELECT pg_advisory_xact_lock(428111,$1)',[year]);
-  const status=await c.query('SELECT phase,heartbeat_at,interactive_until FROM futbot_ea_browser WHERE game_year=$1',[year]);const row=status.rows[0];
+  const status=await c.query('SELECT phase,heartbeat_at,interactive_until,rate_limit_until FROM futbot_ea_browser WHERE game_year=$1',[year]);const row=status.rows[0];
   if(!row?.heartbeat_at||Date.now()-new Date(row.heartbeat_at).getTime()>45000)throw new HttpError(503,'EA browser worker is offline. Deploy the browser service first.');
+  if(action.action==='scan'&&row.rate_limit_until&&new Date(row.rate_limit_until).getTime()>Date.now())throw new HttpError(429,'EA cooldown is active. Wait until the countdown finishes before checking again.');
   if(['click','text','key','scroll','reload'].includes(action.action)){
    if(row.phase==='checking')throw new HttpError(409,'A content check is running. Wait for it to finish.');
    if(!row.interactive_until||new Date(row.interactive_until).getTime()<=Date.now())throw new HttpError(409,'Open the connection screen first.');

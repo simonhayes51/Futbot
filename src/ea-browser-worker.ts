@@ -57,6 +57,8 @@ async function run(){
   await pool.query("UPDATE futbot_ea_browser SET frame_cipher=$2,frame_at=now() WHERE game_year=$1 AND interactive_until>now()",[year,encrypt(image.toString('base64'),secret!)]);lastFrame=Date.now();
  }
  async function scan(){
+  const cooldown=(await pool.query('SELECT rate_limit_until FROM futbot_ea_browser WHERE game_year=$1',[year])).rows[0]?.rate_limit_until;
+  if(cooldown&&new Date(cooldown).getTime()>Date.now()){await patch({phase:'paused',enabled:false,error:'EA cooldown is active. Wait until the countdown finishes before checking again.'});return;}
   console.log('EA content check started.');
   await patch({phase:'checking'});
   try{
@@ -77,7 +79,12 @@ async function run(){
   }catch(e){
    nextScan=Date.now()+interval;
    if(e instanceof EAAuthRequired)await patch({phase:'needs_login',enabled:false,error:'EA requires login or verification. Open Connect EA to resume.'});
-   else if(e instanceof EARateLimited)await patch({phase:'paused',enabled:false,error:'EA rate limited the requests. Checks paused; wait before restarting.'});
+   else if(e instanceof EARateLimited){
+    const until=new Date(Date.now()+e.retryAfterMs);
+    await pool.query('UPDATE futbot_ea_browser SET rate_limit_until=$2 WHERE game_year=$1',[year,until]);
+    console.error(`EA rate limit at ${e.endpoint}; checks paused until ${until.toISOString()}.`);
+    await patch({phase:'paused',enabled:false,error:'EA rate limited the requests. Checks paused. Wait for the cooldown, then press Start / check now.'});
+   }
    else {const detail=collectionFailureMessage(e);console.error('EA content check failed: '+detail);await patch({phase:'error',error:detail});}
   }
  }
