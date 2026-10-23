@@ -5,6 +5,7 @@ window.FutbotContentWatchUpload=(()=>{
  async function render(api){
   const data=await api('content-watch'),poll=data.metadata.lastPublicPollAt,active=poll&&Date.now()-Date.parse(poll)<11*60*1000;
   return `<div class="page-heading"><div><span class="eyebrow">PRIVATE / SBC & EVO MONITOR</span><h1>CONTENT WATCH.</h1><p>Upload a web-app capture to establish your baseline or check new requirements.</p></div></div>
+  ${window.FutbotEABrowser?await window.FutbotEABrowser.render(api):''}
   <div class="stats"><article class="stat"><span class="stat-label">BASELINE</span><div class="big-number">${data.ready?'READY':'NOT SET'}</div><small>${data.definitions} content records</small></article>
   <article class="stat"><span class="stat-label">PUBLIC CHECKS</span><div class="big-number">${active?'RUNNING':poll?'CHECK WORKER':'WAITING'}</div><small>Last successful check: ${esc(when(poll))}</small></article>
   <article class="stat"><span class="stat-label">EVO COVERAGE</span><div class="big-number">${data.coverage?`${data.coverage.evoFetched} / ${data.coverage.evoExpected}`:'—'}</div><small>Definitions included in your captures</small></article></div>

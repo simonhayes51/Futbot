@@ -7,3 +7,5 @@ build/
 .content-watch/
 *.har
 ea-content-snapshot*.json
+.ea-browser/
+playwright/.auth/
