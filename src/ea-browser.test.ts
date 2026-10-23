@@ -6,19 +6,20 @@ import {EACollector,retryAfterDelay,EACollectionFailure,collectionFailureMessage
 import {allowedUTRequest} from './ea-browser-worker.js';
 import {browserAction,browserFrame,browserStatus,enqueueBrowserAction} from './ea-browser-control.js';
 import {encrypt,decrypt,hash} from './auth.js';
-import {definitions} from './content-watch.js';
+import {definitions,applyCapture,emptyState,makeCapture} from './content-watch.js';
 import {testDatabase} from './test-db.js';
 import {createWeb} from './web.js';
 const owner='123456789012345678',other='987654321098765432',secret='s'.repeat(40);
-async function collectorFixture(failStatus=0,emptySecondPage=false){
+async function collectorFixture(failStatus=0,emptySecondPage=false,setStatuses:Record<number,number>={}){
  const handlers:Record<string,Function>={},calls:any[]=[];let disposals=0;
  const context:any={on:(name:string,handler:Function)=>{handlers[name]=handler;},request:{get:async(url:string,options:any)=>{
   calls.push({url,options});let body:any;
-  if(url.endsWith('/sbs/hub/v2'))body={categories:[{sets:[{setId:3,name:'SBC'}]}]};
+  if(url.endsWith('/sbs/hub/v2'))body={categories:[{sets:[...new Set([3,...Object.keys(setStatuses).map(Number)])].map(setId=>({setId,name:'SBC'}))}]};
   else if(url.includes('/sbs/setId/'))body={challenges:[{challengeId:4,setId:3,name:'Challenge',elgReq:[]}]};
   else if(url.endsWith('/academy/hub/v2'))body={categories:[{id:37,count:36,slotIds:Array.from({length:36},(_,i)=>i+1)}],slots:[]};
   else{const offset=Number(new URL(url).searchParams.get('offset'));body={slots:Array.from({length:offset?(emptySecondPage?0:16):20},(_,i)=>({id:offset+i+1,slotName:'EVO '+(offset+i),elgReqs:[],levels:[],randomPlayerPreview:{SECRET:'club'}}))};}
-  return {headers:()=>({'retry-after':'120'}),status:()=>failStatus||200,ok:()=>!failStatus,json:async()=>body,dispose:async()=>{disposals++;}};
+  const setId=Number(url.match(/sbs\/setId\/(\d+)/)?.[1]);const status=setStatuses[setId]??failStatus;
+  return {headers:()=>({'retry-after':'120'}),status:()=>status||200,ok:()=>!status,json:async()=>body,dispose:async()=>{disposals++;}};
  }}};
  const collector=new EACollector(context,27,0);collector.observe();
  await handlers.response({url:()=>UT_ORIGIN+'/ut/auth',status:()=>200,json:async()=>({sid:'PRIVATE_SESSION'})});await new Promise(r=>setImmediate(r));
@@ -107,4 +108,19 @@ test('phone panel displays the cooldown and disables new scans',async()=>{
   assert.equal(w.document.querySelector('[data-ea-action="scan"]').disabled,true);
   assert.equal(w.document.querySelector('[data-ea-action="pause"]').disabled,false);
  }finally{dom.window.close();}
+});
+
+test('one SBC HTTP 512 retains old requirements while other SBCs and all EVO pages are saved',async()=>{
+ const f=await collectorFixture(0,false,{3:512,71:0});const capture=await f.collector.scan();
+ assert.deepEqual(capture.sbcCoverage,{expected:2,fetched:1});assert.equal(capture.warnings.length,1);assert.match(capture.warnings[0],/set 3 unavailable \(HTTP 512\)/);
+ assert.deepEqual(capture.coverage,{evoExpected:36,evoFetched:36});assert.ok(f.calls.some(c=>c.url.includes('/setId/71/')));
+ const state=emptyState(27);applyCapture(state,makeCapture([{url:UT_ORIGIN+'/ut/game/fc27/sbs/setId/3/challenges',capturedAt:'2026-01-01T00:00:00Z',body:{challenges:[{challengeId:999,setId:3,name:'Previously captured requirement',elgReq:[]}]}}]),true);
+ const old=JSON.stringify(state.records['sbc-challenge:999']);assert.ok(old);applyCapture(state,capture);assert.equal(JSON.stringify(state.records['sbc-challenge:999']),old);
+ assert.equal(Object.values(state.records).filter(r=>r.definition.kind==='evo').length,36);
+ assert.equal(f.disposals(),f.calls.length);
+});
+test('a rate limit or login error on an individual SBC still stops requests',async()=>{
+ for(const [status,type] of [[429,EARateLimited],[401,EAAuthRequired]] as const){
+  const f=await collectorFixture(0,false,{3:status,71:0});await assert.rejects(f.collector.scan(),type);assert.equal(f.calls.length,2);
+ }
 });
