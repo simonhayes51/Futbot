@@ -20,7 +20,7 @@ function canonical(v:unknown):unknown{if(Array.isArray(v))return v.map(canonical
 export function fingerprint(v:unknown):string{return createHash('sha256').update(JSON.stringify(canonical(v))).digest('hex');}
 export function publicContentUrl(value:string):boolean{try{const u=new URL(value);return u.origin==='https://www.ea.com'&&!u.username&&!u.password&&!u.search&&!u.hash&&/^\/ea-sports-fc\/ultimate-team\/web-app\/(?:loc\/en-US\.json|content\/[A-Za-z0-9-]+\/20\d{2}\/fut\/(?:loc\/companion\/futweb\/cdn\/en-US\.json|packs\/loc\/storepackdescriptions\.en_us\.xml))$/.test(u.pathname);}catch{return false;}}
 function relevant(url:string):boolean{return /\/ut\/game\/fc\d+\/(?:academy\/(?:hub\/v2|category\/\d+)|sbs\/(?:hub\/v2|setId\/\d+\/challenges))$/.test(url)||publicContentUrl(url);}
-export function readHar(payload:unknown):Capture{
+export function readHar(payload:unknown,allowEmpty=false):Capture{
  const documents:Document[]=[],publicUrls=new Set<string>();let capturedAt='';
  for(const e of arr(obj(obj(payload).log).entries)){
   const request=obj(e.request),response=obj(e.response),content=obj(response.content);let u:URL;try{u=new URL(request.url);}catch{continue;}
@@ -30,7 +30,7 @@ export function readHar(payload:unknown):Capture{
   let body:unknown;try{body=u.pathname.endsWith('.xml')?text:JSON.parse(text);}catch{throw new Error('Invalid content response at '+u.pathname);}
   const url=u.origin+u.pathname;documents.push({url,capturedAt:at,body});if(publicContentUrl(url))publicUrls.add(url);if(at>capturedAt)capturedAt=at;
  }
- if(!documents.length)throw new Error('No supported EA SBC/EVO responses found. Export a HAR with response content.');
+ if(!documents.length){if(allowEmpty)return makeCapture([]);throw new Error('No supported EA SBC/EVO responses found. Export a HAR with response content.');}
  return makeCapture(documents,[...publicUrls],capturedAt);
 }
 export function makeCapture(documents:Document[],publicUrls:string[]=[],capturedAt=new Date().toISOString()):Capture{

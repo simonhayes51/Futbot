@@ -5,6 +5,8 @@ import {fileURLToPath} from 'node:url';
 import {parseArgs} from 'node:util';
 import {PriceRepository} from './prices.js';
 import {readMarketPlayers} from './content-watch-players.js';
+import pg from 'pg';
+import {databaseWatch,type WatchMetadata} from './content-watch-store.js';
 import {readHar,makeCapture,applyCapture,emptyState,publicContentUrl,shortlist,ruleText,type WatchState,type Change,type Capture,type Document,type Player,type Definition} from './content-watch.js';
 
 const MAX_BODY=30*1024*1024;
@@ -83,10 +85,15 @@ async function run():Promise<void>{
  if(!Number.isInteger(year)||year<20||year>99||!['ps5','pc'].includes(platform)||!Number.isFinite(maxAge)||maxAge<=0||!Number.isFinite(interval)||interval<60)throw new Error('Invalid year, platform, price age or interval (minimum 60 seconds)');
  if(!['import','poll','watch','report','deliver'].includes(command)){console.log('content-watch import --har FILE [--baseline]\ncontent-watch import --snapshot FILE [--baseline]\ncontent-watch poll | watch [--interval 300] [--deliver]\ncontent-watch report [--players enriched-players.json]\ncontent-watch deliver\nCommon options: --state DIR --year 27 --platform ps5');return;}
  const dir=resolve(values.state??process.env.CONTENT_WATCH_STATE_DIR??'.content-watch');
+ const storage=process.env.CONTENT_WATCH_STORE??(process.env.APP_DATABASE_URL?'database':'file');
+ if(!['database','file'].includes(storage))throw new Error('CONTENT_WATCH_STORE must be database or file');
+ if(storage==='database'&&!process.env.APP_DATABASE_URL)throw new Error('Database content watch requires APP_DATABASE_URL');
+ if(storage==='database'&&process.env.APP_DATABASE_URL===process.env.PRICE_DATABASE_URL)throw new Error('Use a separate application database');
+ const appPool=storage==='database'?new pg.Pool({connectionString:process.env.APP_DATABASE_URL,max:2,connectionTimeoutMillis:10000,statement_timeout:20000,application_name:'futbot-content-watch'}):undefined;
  let stopped=false;process.once('SIGINT',()=>{stopped=true;});process.once('SIGTERM',()=>{stopped=true;});
  let wake:(()=>void)|undefined;const signalStop=()=>wake?.();process.once('SIGINT',signalStop);process.once('SIGTERM',signalStop);
- async function cycle(){await withLock(dir,async()=>{
-  const state=await loadState(dir,year),save=()=>atomicJson(join(dir,'state.json'),state);
+ const withState=async(work:(state:WatchState,save:()=>Promise<void>,metadata:WatchMetadata)=>Promise<void>)=>appPool?databaseWatch(appPool,year,work):withLock(dir,async()=>{const state=await loadState(dir,year);return work(state,()=>atomicJson(join(dir,'state.json'),state),{});});
+ async function cycle(){await withState(async(state,save,metadata)=>{
   if(values.url){for(const url of values.url)if(!publicContentUrl(url))throw new Error('Unsupported public URL');state.publicUrls=[...new Set([...state.publicUrls,...values.url])];}
   let capture:Capture|undefined;
   if(command==='import'){
@@ -101,16 +108,16 @@ async function run():Promise<void>{
    // A failed source aborts this scan; it does not replace state with an error page.
    const docs:Document[]=[];for(const url of state.publicUrls)docs.push(await fetchPublic(url));capture=makeCapture(docs,state.publicUrls);
   }
-  if(capture){const fresh=Object.keys(state.records).length===0;const changes=applyCapture(state,capture,Boolean(values.baseline)||fresh);await save();console.log(JSON.stringify({definitions:Object.keys(state.records).length,changes:changes.length,baseline:Boolean(values.baseline)||fresh,coverage:state.coverage}));}
+  if(capture){const fresh=Object.keys(state.records).length===0;const changes=applyCapture(state,capture,Boolean(values.baseline)||fresh);if(command==='poll'||command==='watch'){metadata.lastPublicPollAt=new Date().toISOString();metadata.lastPollError=null;}await save();console.log(JSON.stringify({definitions:Object.keys(state.records).length,changes:changes.length,baseline:Boolean(values.baseline)||fresh,coverage:state.coverage}));}
   let players:Player[]=values.players?JSON.parse(await readFile(values.players,'utf8')):[];if(!Array.isArray(players))throw new Error('Player feed must be a JSON array');
   if(values.database){if(values.players)throw new Error('Choose --players or --database');if(!process.env.PRICE_DATABASE_URL)throw new Error('--database requires PRICE_DATABASE_URL');const repo=new PriceRepository(process.env.PRICE_DATABASE_URL,year);try{players=await readMarketPlayers(repo.pool,year,platform,maxAge);}finally{await repo.pool.end();}}
-  await writeFile(join(dir,'report.md'),report(state,players,platform,maxAge),{mode:0o600});
+  if(!appPool){await writeFile(join(dir,'report.md'),report(state,players,platform,maxAge),{mode:0o600});}
   if(command==='deliver'||values.deliver){const userId=process.env.CONTENT_WATCH_USER_ID,token=process.env.DISCORD_TOKEN;if(!userId||!token)throw new Error('Private delivery requires CONTENT_WATCH_USER_ID and DISCORD_TOKEN');
    const pending=state.events.some(e=>!e.delivered);if(pending){const send=await discordSender(userId,token,players,platform,year,maxAge);console.log('Delivered '+await deliverPending(state,send,save)+' private alerts');}}
-  console.log('Report: '+join(dir,'report.md'));
+  console.log(appPool?'Content watch state saved in the application database.':'Report: '+join(dir,'report.md'));
  });}
- do{try{await cycle();}catch(e){if(command!=='watch')throw e;console.error('Content watch scan failed: '+(e instanceof Error?e.message:'unknown error'));}
+ try{do{try{await cycle();}catch(e){if(command!=='watch')throw e;console.error('Content watch scan failed: '+(e instanceof Error?e.message:'unknown error'));}
   if(command!=='watch'||stopped)break;await new Promise<void>(done=>{const timer=setTimeout(done,interval*1000);wake=()=>{clearTimeout(timer);done();};});wake=undefined;
- }while(!stopped);
+ }while(!stopped);}finally{await appPool?.end();}
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))run().catch(e=>{console.error(e instanceof Error?e.message:'Content watch failed');process.exitCode=1;});
