@@ -157,7 +157,10 @@ export function evaluate(card, now) {
   if (recent.some(p => p.price < low * 0.85) ||
       Math.max(...recent.map(p => p.price)) / Math.min(...recent.map(p => p.price)) > 1.04)
     return {reason: 'unstable_or_anomalous_price'};
-  if (recent.some(p => p.price > low * 1.025) || card.price > typical * 0.94)
+  // Confirm a material discount from the card's own normal price. Requiring
+  // every recent reading to sit within 2.5% of its week-low was an extra gate
+  // beyond the margin and stability checks, and filtered out valid dips.
+  if (card.price > typical * 0.94)
     return {reason: 'not_a_confirmed_dip'};
   // Conservative target: weakest daily upper quartile, then 2% undercut buffer.
   const target = Math.floor(Math.min(...days.map(d => quantile(d.map(p => p.price), 0.75))) * 0.98 / 100) * 100;
