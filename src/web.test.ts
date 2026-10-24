@@ -9,6 +9,8 @@ test('live API rejects anonymous access, forged mutations and unauthorized serve
  for(const path of ['/', '/app/', '/app/live.js', '/app/live.css', '/pricing/', '/demo/']){const page=await realFetch(base+path);assert.equal(page.status,200,`Static route ${path} must be served`);if(path==='/app/')assert.match(await page.text(),/Continue with Discord/);}
  assert.equal((await realFetch(base+'/missing-file')).status,404);
  assert.equal((await realFetch(base+'/api/me')).status,401);
+ const me=await realFetch(base+'/api/me',{headers:{Cookie:'futbot=token'}});assert.equal(me.status,200);assert.equal('contentWatchOperator' in await me.json(),false);
+ for(const path of ['/api/content-watch','/api/content-watch/report','/api/content-watch/browser','/api/content-watch/browser/frame','/app/content-watch.js','/app/ea-browser.js'])assert.equal((await realFetch(base+path,{headers:{Cookie:'futbot=token'}})).status,404);
  const failure=await realFetch(base+'/api/market',{headers:{Cookie:'futbot=token'}});assert.equal(failure.status,503);const failureBody=await failure.text();assert.match(failureBody,/57014/);assert(!failureBody.includes('do-not-display'));
  assert.equal((await realFetch(base+'/auth/callback?code=bad&state=forged')).status,400);
  assert.equal((await realFetch(base+'/api/alerts',{method:'POST',headers:{Cookie:'futbot=token','Content-Type':'application/json'},body:'{}'})).status,403);

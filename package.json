@@ -9,17 +9,13 @@
     "start": "node --import tsx src/index.ts",
     "migrate": "node --import tsx src/migrate.ts",
     "build:site": "python3 scripts/build-marketing.py",
-    "start:web": "node --import tsx src/web-entry.ts",
-    "content:watch": "node --import tsx src/content-watch-runner.ts",
-    "content:browser": "node --import tsx src/ea-browser-worker.ts"
+    "start:web": "node --import tsx src/web-entry.ts"
   },
   "dependencies": {
     "discord.js": "^14.25.0",
     "dotenv": "^16.6.1",
     "pg": "^8.16.3",
-    "playwright": "1.64.1",
     "sharp": "^0.34.5",
-    "stream-json": "^3.7.0",
     "stripe": "^22.6.0",
     "tsx": "^4.23.15"
   },
