@@ -1,7 +1,0 @@
-FROM node:22-bookworm
-WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci && npx playwright install --with-deps chromium
-COPY . .
-ENV EA_BROWSER_PROFILE_DIR=/data/ea-browser
-CMD ["sh", "-c", "npm run migrate && npm run content:browser"]

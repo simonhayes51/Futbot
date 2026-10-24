@@ -148,16 +148,3 @@ X/TweetShift-style ingestion (provider access/costs not configured), sales-histo
 The startup log reports the number of registered commands. Redeploy the current `main` revision if the command count does not include `/tradepost`. Database pools have finite connection/statement timeouts and idle error listeners. Alert failures report a redacted error code and actionable hint (including disk-full, connection resets, restarts and query timeouts), without printing connection strings. Receiving SIGTERM means the host asked the process to stop; check deployment/host events to establish why. Fontconfig discovery is bundled with the renderer.
 
 Discord GET requests are coalesced and cached for ten seconds to avoid duplicate permission reads. Writes explicitly bypass cached permission/channel checks. Rate-limit responses respect Retry-After before one bounded retry; longer limits are shown with a wait time. Server discovery intersects the user guild list with the bot guild list rather than probing every user server. Market lists exclude incomplete/unknown metadata; movers show 80+ rated items priced at least 1,000 coins, using a median baseline with at least three observations. Large percentage changes are flagged for verification, not silently removed.
-
-## Private SBC / EVO content watch
-
-An optional operator worker monitors EA's public catalogue/localisation files and
-compares imported SBC/EVO definitions. It records requirement changes, checks exact
-card eligibility and fresh prices, and can send private Discord alerts.
-See [setup and limitations](scripts/content-watch.md).
-
-An optional [automatic EA browser worker](scripts/automatic-ea-browser.md) can collect
-authenticated SBC/EVO definitions and provides owner-only phone login controls.
-It requires a separate Chromium container and a live login pilot on Railway.
-
-Unreleased-only catalogue monitoring and release-status controls: [scripts/unreleased-content.md](scripts/unreleased-content.md).

@@ -4,6 +4,14 @@ import {claimSeat,userBenefits,serverPlan} from './plans.js';
 import {nextRun,validateFeed,feedTick,fingerprint,feedPayload} from './feeds.js';
 import {AlertRepository,fodderAlertTick} from './alerts.js';import {watch} from './settings.js';
 const g='123456789012345678';
+test('retired scanner migration removes saved capture and browser data while preserving bot tables',async t=>{
+ const {db,pool}=await testDatabase();t.after(()=>db.close());
+ const {readFile}=await import('node:fs/promises');const sql=await readFile(new URL('../sql/013-remove-content-watch.sql',import.meta.url),'utf8');
+ for(const name of ['futbot_content_watch','futbot_ea_browser','futbot_ea_browser_commands'])await db.exec(`CREATE TABLE ${name}(payload text); INSERT INTO ${name} VALUES('retired data')`);
+ await db.exec(sql);await db.exec(sql);
+ for(const name of ['futbot_content_watch','futbot_ea_browser','futbot_ea_browser_commands'])assert.equal((await pool.query('SELECT to_regclass($1) AS name',[name])).rows[0].name,null);
+ for(const name of ['futbot_alerts','futbot_sessions','futbot_subscriptions','futbot_guilds'])assert.equal((await pool.query('SELECT to_regclass($1) AS name',[name])).rows[0].name,name);
+});
 test('daily schedules follow London DST and reject invalid destinations and times',()=>{
  assert.equal(nextRun(['18:05'],'Europe/London',new Date('2026-10-15T12:00:00Z')).toISOString(),'2026-10-15T17:05:00.000Z');
  assert.equal(nextRun(['18:05'],'Europe/London',new Date('2026-11-15T12:00:00Z')).toISOString(),'2026-11-15T18:05:00.000Z');
